@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "dizziee.system-updates",
+  "name": "System Updates",
+  "version": "1.0.0",
+  "author": "Dizziee",
+  "license": "MIT",
+  "description": "Arch, AUR, and Flatpak update indicator with per-repo update buttons.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "System Updates",
+    "description": "Shows available updates from pacman, AUR, and Flatpak.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaults": {
+      "refreshIntervalSec": 1800,
+      "alwaysShow": true
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 300,
+        "max": 7200,
+        "step": 300,
+        "defaultValue": 1800
+      },
+      {
+        "key": "alwaysShow",
+        "type": "boolean",
+        "label": "Always Show",
+        "description": "Keep the icon visible even when no updates are available.",
+        "defaultValue": false
+      }
+    ]
+  }
+}
