@@ -11,10 +11,16 @@ System update indicator for the Omarchy bar. Shows available updates from pacman
 ## Installation
 
 ```sh
-git clone https://github.com/JJDizz1L/dizziee.system-updates.git ~/.config/omarchy/plugins/dizziee.system-updates
+omarchy plugin add https://github.com/JJDizz1L/dizziee.system-updates.git --enable
 ```
 
-Then enable **System Updates** in the Omarchy bar widget settings.
+Then place it in your bar layout with `omarchy bar plugin add dizziee.system-updates [--section <left|center|right>]`.
+
+You can validate the plugin at any time with:
+
+```sh
+omarchy plugin validate ~/.config/omarchy/plugins/dizziee.system-updates
+```
 
 ## Configuration
 
