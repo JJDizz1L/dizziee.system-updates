@@ -14,8 +14,13 @@ System update indicator for the Omarchy bar. Shows available updates from pacman
 omarchy plugin add https://github.com/JJDizz1L/dizziee.system-updates.git --enable
 ```
 
-Then place it in your bar layout with `omarchy bar plugin add dizziee.system-updates [--section <left|center|right>]`.
-Suggested placement: `omarchy bar plugin add dizziee.system-updates --section center`
+### Then place it in your bar layout with 
+`omarchy bar plugin add dizziee.system-updates [--section <left|center|right>]`</br>
+
+Suggested placement: 
+```
+omarchy bar plugin add dizziee.system-updates --section center
+```
 
 You can validate the plugin at any time with:
 
