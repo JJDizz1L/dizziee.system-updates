@@ -31,6 +31,10 @@ Configuration lives in `~/.config/omarchy/shell.json`.
 | `refreshIntervalSec` | integer (300–7200) | 1800 | How often to check for updates (seconds) |
 | `alwaysShow` | boolean | false | Keep icon visible even when no updates are available |
 
+## Preview
+
+![preview](preview.png)
+
 ## License
 
 MIT
