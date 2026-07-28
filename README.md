@@ -15,6 +15,7 @@ omarchy plugin add https://github.com/JJDizz1L/dizziee.system-updates.git --enab
 ```
 
 Then place it in your bar layout with `omarchy bar plugin add dizziee.system-updates [--section <left|center|right>]`.
+Suggested placement: `omarchy bar plugin add dizziee.system-updates --section center`
 
 You can validate the plugin at any time with:
 
@@ -23,6 +24,7 @@ omarchy plugin validate ~/.config/omarchy/plugins/dizziee.system-updates
 ```
 
 ## Configuration
+Configuration lives in `~/.config/omarchy/shell.json`.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
