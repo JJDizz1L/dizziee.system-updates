@@ -36,6 +36,18 @@ Configuration lives in `~/.config/omarchy/shell.json`.
 | `refreshIntervalSec` | integer (300–7200) | 1800 | How often to check for updates (seconds) |
 | `alwaysShow` | boolean | true | Keep icon visible even when no updates are available |
 
+## How updates work
+
+The **Arch** update button runs a direct pacman system upgrade:
+
+```sh
+sudo env OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu
+```
+
+Omarchy installs a pacman hook (`omarchy-update-pacman-guard`) that aborts a bare `sudo pacman -Syu` to route updates through `omarchy update` — which handles the transcript, snapshot, keyrings, migrations, and post-update hooks. The `OMARCHY_ALLOW_DIRECT_PACMAN=1` env var opts this one transaction past that guard: it upgrades packages directly and skips Omarchy's update pipeline. For the full managed flow, run `omarchy update` instead.
+
+AUR updates run through your helper (`yay -Sua` / `paru -Sua`) and Flatpak through `flatpak update`.
+
 ## Preview
 
 ![preview](preview.png)
