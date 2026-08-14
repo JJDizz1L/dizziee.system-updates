@@ -34,7 +34,7 @@
         "type": "boolean",
         "label": "Always Show",
         "description": "Keep the icon visible even when no updates are available.",
-        "defaultValue": false
+        "defaultValue": true
       }
     ]
   }

@@ -94,7 +94,7 @@ def main() -> int:
 
     repos = [
         collect_repo("pacman", "Arch", pacman_count, pacman_pkgs, "arch-logo.svg",
-            "sudo pacman -Syu; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
+            "sudo env OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             True),
         collect_repo("aur", "AUR", aur_count, aur_pkgs, "arch-logo.svg",
             aur_update_cmd(helper),
@@ -109,7 +109,6 @@ def main() -> int:
     result = {
         "repos": repos,
         "total": total,
-        "ready": True,
     }
 
     print(json.dumps(result, separators=(",", ":")))

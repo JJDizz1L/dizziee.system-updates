@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
@@ -29,6 +28,7 @@ Panel {
   property string pendingRepo: ""
   property bool fastPollActive: false
   property int fastPollCount: 0
+  property int fastPollStartCount: -1
   readonly property int maxFastPolls: 24
 
   readonly property string barIcon: root.total > 0 ? "󰜈" : "󰏗"
@@ -47,7 +47,7 @@ Panel {
 
     if (pendingRepo && fastPollActive) {
       var repo = Model.repoById(repos, pendingRepo)
-      if (repo && currentRepoCount(pendingRepo) !== repo.count) {
+      if (repo && repo.count !== fastPollStartCount) {
         stopFastPoll()
       }
     }
@@ -77,10 +77,11 @@ Panel {
     }
     if (!cmd) return
 
+    fastPollStartCount = currentRepoCount(id)
     pendingRepo = id
     fastPollCount = 0
-    fastPollActive = true
-    fastPollTimer.restart()
+    fastPollActive = fastPollStartCount > 0
+    if (fastPollActive) fastPollTimer.restart()
 
     var launcher = "omarchy-launch-terminal"
     root.bar.run(launcher + " bash -c " + Util.shellQuote(cmd))
@@ -126,7 +127,7 @@ Panel {
     var next = cloneObject(source, {}) || {}
     var refresh = Number(next.refreshIntervalSec === undefined || next.refreshIntervalSec === null ? 1800 : next.refreshIntervalSec)
     next.refreshIntervalSec = Math.round(root.clamp(isFinite(refresh) ? refresh : 1800, 300, 7200))
-    next.alwaysShow = next.alwaysShow === true
+    next.alwaysShow = next.alwaysShow !== false
     return next
   }
 
@@ -190,7 +191,7 @@ Panel {
     if (opened) { refresh(); pingRepos() }
   }
 
-  visible: total > 0 || setting("alwaysShow", false) === true
+  visible: total > 0 || setting("alwaysShow", true) === true
   implicitWidth: visible ? button.implicitWidth : 0
   implicitHeight: visible ? button.implicitHeight : 0
 
@@ -563,7 +564,7 @@ Panel {
                 Layout.fillWidth: true
                 label: "Always Show"
                 description: checked ? "Icon visible even with no updates" : "Icon hidden when no updates available"
-                checked: root.draftValue("alwaysShow", false) === true
+                checked: root.draftValue("alwaysShow", true) === true
                 foreground: root.fg
                 accent: Color.accent
                 fontFamily: root.fontFamily
