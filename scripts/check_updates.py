@@ -29,8 +29,14 @@ def aur_helper() -> str | None:
     return None
 
 
-def pacman_pkg_count() -> int:
-    return count_lines(["pacman", "-Qq"])
+def installed_pkg_names() -> set[str]:
+    try:
+        result = subprocess.run(["pacman", "-Qq"], capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return set()
+        return set(result.stdout.split())
+    except Exception:
+        return set()
 
 
 def aur_pkg_count() -> int:
@@ -39,6 +45,16 @@ def aur_pkg_count() -> int:
 
 def flatpak_pkg_count() -> int:
     return count_lines(["flatpak", "list", "--columns=app"])
+
+
+def omarchy_pkg_count(installed: set[str]) -> int:
+    try:
+        result = subprocess.run(["pacman", "-Slq", "omarchy"], capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return 0
+        return len(set(result.stdout.split()).intersection(installed))
+    except Exception:
+        return 0
 
 
 def check_pacman() -> int:
@@ -59,6 +75,18 @@ def check_flatpak() -> int:
     if shutil.which("flatpak") is None:
         return 0
     return count_lines(["flatpak", "remote-ls", "--updates"])
+
+
+def check_omarchy() -> int:
+    if shutil.which("omarchy-update-available") is None:
+        return 0
+    try:
+        result = subprocess.run(
+            ["omarchy-update-available"], capture_output=True, text=True, timeout=30
+        )
+        return 1 if result.returncode == 0 else 0
+    except Exception:
+        return 0
 
 
 def aur_update_cmd(helper: str | None) -> str:
@@ -87,10 +115,13 @@ def main() -> int:
     aur_count = check_aur(helper)
     flatpak_installed = shutil.which("flatpak") is not None
     flatpak_count = check_flatpak() if flatpak_installed else 0
+    omarchy_count = check_omarchy()
 
-    pacman_pkgs = pacman_pkg_count()
+    installed = installed_pkg_names()
+    pacman_pkgs = len(installed)
     aur_pkgs = aur_pkg_count() if helper is not None else 0
     flatpak_pkgs = flatpak_pkg_count() if flatpak_installed else 0
+    omarchy_pkgs = omarchy_pkg_count(installed)
 
     repos = [
         collect_repo("pacman", "Arch", pacman_count, pacman_pkgs, "arch-logo.svg",
@@ -102,9 +133,12 @@ def main() -> int:
         collect_repo("flatpak", "Flatpak", flatpak_count, flatpak_pkgs, "flatpak.svg",
             "flatpak update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             flatpak_installed),
+        collect_repo("omarchy", "Omarchy", omarchy_count, omarchy_pkgs, "omarchy.svg",
+            "omarchy update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
+            True),
     ]
 
-    total = pacman_count + aur_count + flatpak_count
+    total = pacman_count + aur_count + flatpak_count + omarchy_count
 
     result = {
         "repos": repos,

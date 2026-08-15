@@ -19,7 +19,7 @@ Panel {
     }
     return filtered
   }
-  property var repoStatus: ({ "pacman": "idle", "aur": "idle", "flatpak": "idle" })
+  property var repoStatus: ({ "pacman": "idle", "aur": "idle", "flatpak": "idle", "omarchy": "idle" })
   property double lastPingAt: 0
   property string lastCheckedText: ""
   property bool settingsMode: false
@@ -64,6 +64,7 @@ Panel {
     if (id === "pacman") return Qt.resolvedUrl("assets/arch-logo.svg")
     if (id === "aur") return Qt.resolvedUrl("assets/arch-logo.svg")
     if (id === "flatpak") return Qt.resolvedUrl("assets/flatpak.svg")
+    if (id === "omarchy") return Qt.resolvedUrl("assets/omarchy.svg")
     return ""
   }
 
@@ -98,10 +99,11 @@ Panel {
     if (Date.now() - lastPingAt < 600000 && repoStatus.pacman !== "idle") return
     lastPingAt = Date.now()
     updateLastChecked()
-    repoStatus = { "pacman": "checking", "aur": "checking", "flatpak": "checking" }
+    repoStatus = { "pacman": "checking", "aur": "checking", "flatpak": "checking", "omarchy": "checking" }
     if (!pingPacmanProc.running) pingPacmanProc.running = true
     if (!pingAurProc.running) pingAurProc.running = true
     if (!pingFlatpakProc.running) pingFlatpakProc.running = true
+    if (!pingOmarchyProc.running) pingOmarchyProc.running = true
   }
 
   function updateLastChecked() {
@@ -272,6 +274,17 @@ Panel {
     }
   }
 
+  Process {
+    id: pingOmarchyProc
+    command: ["curl", "-sI", "--connect-timeout", "6", "--max-time", "9", "https://omarchy.org/"]
+    onExited: function(exitCode) {
+      var next = {}
+      for (var k in root.repoStatus) next[k] = root.repoStatus[k]
+      next.omarchy = exitCode === 0 ? "online" : "offline"
+      root.repoStatus = next
+    }
+  }
+
   WidgetButton {
     id: button
     anchors.fill: parent
@@ -429,7 +442,8 @@ Panel {
                   }
 
                   Text {
-                    text: " · " + modelData.pkgCount + " pkgs · "
+                    visible: modelData.pkgCount > 0
+                    text: " · " + modelData.pkgCount + " pkgs"
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -437,7 +451,7 @@ Panel {
 
                   Text {
                     visible: root.repoStatus[modelData.id] === "checking"
-                    text: "Checking..."
+                    text: " · Checking..."
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -446,7 +460,7 @@ Panel {
 
                   Text {
                     visible: root.repoStatus[modelData.id] === "online"
-                    text: "● Online"
+                    text: " · ● Online"
                     color: "#4ade80"
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -454,7 +468,7 @@ Panel {
 
                   Text {
                     visible: root.repoStatus[modelData.id] === "offline"
-                    text: "✗ Offline"
+                    text: " · ✗ Offline"
                     color: "#f87171"
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption

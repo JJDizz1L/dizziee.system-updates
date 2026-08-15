@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "dizziee.system-updates",
   "name": "System Updates",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "Dizziee",
   "license": "MIT",
-  "description": "Arch, AUR, and Flatpak update indicator with per-repo update buttons.",
+  "description": "Arch, AUR, Flatpak, and Omarchy update indicator with per-repo update buttons.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "Panel.qml"
