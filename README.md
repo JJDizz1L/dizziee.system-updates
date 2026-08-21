@@ -50,6 +50,10 @@ AUR updates run through your helper (`yay -Sua` / `paru -Sua`) and Flatpak throu
 
 The **Omarchy** update button opens your terminal and runs `omarchy update` — the full managed Omarchy update pipeline (transcript, snapshot, keyrings, migrations, and post-update hooks).
 
+### Event-driven refresh
+
+After clicking **Update**, the widget watches the Hyprland event socket (`Quickshell.Hyprland`) for the updater terminal to close, then rescans once immediately — no blind polling. A slow fallback poll (10s intervals) only runs if window tracking is unavailable. Repo reachability checks are consolidated into a single process and skipped entirely when NetworkManager reports no connectivity.
+
 ## Preview
 
 ![preview](preview.png)

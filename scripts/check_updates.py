@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Check Arch, AUR, and Flatpak for available updates."""
+"""Check Arch, AUR, Flatpak, and Omarchy for available updates."""
 
 from __future__ import annotations
 
 import json
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 
-def count_lines(command: list[str]) -> int:
+def count_lines(command: list[str], timeout: int = 30) -> int:
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             return 0
         return len([line for line in result.stdout.strip().split("\n") if line.strip()])
@@ -111,17 +112,29 @@ def collect_repo(id: str, name: str, count: int, pkg_count: int, icon: str, upda
 
 def main() -> int:
     helper = aur_helper()
-    pacman_count = check_pacman()
-    aur_count = check_aur(helper)
     flatpak_installed = shutil.which("flatpak") is not None
-    flatpak_count = check_flatpak() if flatpak_installed else 0
-    omarchy_count = check_omarchy()
 
-    installed = installed_pkg_names()
+    # Repo checks hit the network and are independent; run them concurrently so
+    # total scan time is the slowest single check instead of the sum of all.
+    with ThreadPoolExecutor(max_workers=7) as pool:
+        f_pacman = pool.submit(check_pacman)
+        f_aur = pool.submit(check_aur, helper)
+        f_flatpak = pool.submit(check_flatpak) if flatpak_installed else None
+        f_omarchy = pool.submit(check_omarchy)
+        f_installed = pool.submit(installed_pkg_names)
+        f_flatpak_pkgs = pool.submit(flatpak_pkg_count) if flatpak_installed else None
+        f_omarchy_pkgs = pool.submit(lambda: omarchy_pkg_count(f_installed.result()))
+
+    pacman_count = f_pacman.result()
+    aur_count = f_aur.result()
+    flatpak_count = f_flatpak.result() if f_flatpak else 0
+    omarchy_count = f_omarchy.result()
+
+    installed = f_installed.result()
     pacman_pkgs = len(installed)
     aur_pkgs = aur_pkg_count() if helper is not None else 0
-    flatpak_pkgs = flatpak_pkg_count() if flatpak_installed else 0
-    omarchy_pkgs = omarchy_pkg_count(installed)
+    flatpak_pkgs = f_flatpak_pkgs.result() if f_flatpak_pkgs else 0
+    omarchy_pkgs = f_omarchy_pkgs.result()
 
     repos = [
         collect_repo("pacman", "Arch", pacman_count, pacman_pkgs, "arch-logo.svg",

@@ -2,6 +2,8 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
+import Quickshell.Hyprland
+import Quickshell.Networking
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
@@ -28,13 +30,23 @@ Panel {
   property string pendingRepo: ""
   property bool fastPollActive: false
   property int fastPollCount: 0
-  property int fastPollStartCount: -1
-  readonly property int maxFastPolls: 24
+  readonly property int maxFastPolls: 30
+  // Hyprland event-socket tracking of the updater terminal window. When it
+  // closes, updates are done and one immediate rescan replaces blind polling.
+  property string watchedWindowAddress: ""
+  property bool awaitingUpdateWindow: false
 
   readonly property string barIcon: root.total > 0 ? "󰜈" : "󰏗"
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(fg, 1.45)
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : "JetBrainsMono Nerd Font"
+  readonly property bool networkOnline: !Networking.canCheckConnectivity || Networking.connectivity === NetworkConnectivity.Full
+  readonly property var repoUrls: ({
+    "pacman": "https://archlinux.org/packages/",
+    "aur": "https://aur.archlinux.org/",
+    "flatpak": "https://flathub.org/",
+    "omarchy": "https://omarchy.org/"
+  })
 
   function refresh() {
     if (!scannerProc.running) scannerProc.running = true
@@ -44,20 +56,6 @@ Panel {
     var parsed = Model.parseRepoList(raw)
     repos = parsed.repos
     total = parsed.total
-
-    if (pendingRepo && fastPollActive) {
-      var repo = Model.repoById(repos, pendingRepo)
-      if (repo && repo.count !== fastPollStartCount) {
-        stopFastPoll()
-      }
-    }
-  }
-
-  function currentRepoCount(id) {
-    for (var i = 0; i < repos.length; i++) {
-      if (repos[i].id === id) return repos[i].count
-    }
-    return -1
   }
 
   function iconSource(id) {
@@ -78,11 +76,16 @@ Panel {
     }
     if (!cmd) return
 
-    fastPollStartCount = currentRepoCount(id)
     pendingRepo = id
     fastPollCount = 0
-    fastPollActive = fastPollStartCount > 0
-    if (fastPollActive) fastPollTimer.restart()
+    // Primary completion signal: Hyprland closewindow of the updater terminal.
+    if (watchedWindowAddress === "" && !awaitingUpdateWindow) {
+      awaitingUpdateWindow = true
+      watchCaptureTimeout.restart()
+    }
+    // Fallback while the terminal stays open (or if event capture fails).
+    fastPollActive = true
+    fastPollTimer.restart()
 
     var launcher = "omarchy-launch-terminal"
     root.bar.run(launcher + " bash -c " + Util.shellQuote(cmd))
@@ -90,20 +93,49 @@ Panel {
 
   function stopFastPoll() {
     pendingRepo = ""
+    watchedWindowAddress = ""
+    awaitingUpdateWindow = false
     fastPollActive = false
     fastPollTimer.stop()
     refresh()
+  }
+
+  function setRepoStatus(id, status) {
+    var next = {}
+    for (var k in root.repoStatus) next[k] = root.repoStatus[k]
+    if (next[id] !== undefined) next[id] = status
+    root.repoStatus = next
+  }
+
+  function buildPingCommand() {
+    var script = ""
+    for (var i = 0; i < repos.length; i++) {
+      var r = repos[i]
+      var url = repoUrls[r.id]
+      if (r.installed !== true || !url) continue
+      script += "(curl -sI --connect-timeout 6 --max-time 9 " + url +
+        " >/dev/null 2>&1 && echo '" + r.id + " online' || echo '" + r.id + " offline') & "
+    }
+    return script + "wait"
   }
 
   function pingRepos() {
     if (Date.now() - lastPingAt < 600000 && repoStatus.pacman !== "idle") return
     lastPingAt = Date.now()
     updateLastChecked()
-    repoStatus = { "pacman": "checking", "aur": "checking", "flatpak": "checking", "omarchy": "checking" }
-    if (!pingPacmanProc.running) pingPacmanProc.running = true
-    if (!pingAurProc.running) pingAurProc.running = true
-    if (!pingFlatpakProc.running) pingFlatpakProc.running = true
-    if (!pingOmarchyProc.running) pingOmarchyProc.running = true
+    var next = {}
+    for (var k in repoStatus) next[k] = repoStatus[k]
+    for (var id in repoUrls) next[id] = "checking"
+    repoStatus = next
+
+    if (!networkOnline) {
+      var off = {}
+      for (var k2 in repoStatus) off[k2] = repoStatus[k2] === "checking" ? "offline" : repoStatus[k2]
+      repoStatus = off
+      return
+    }
+    pingProc.command = ["bash", "-c", buildPingCommand()]
+    if (!pingProc.running) pingProc.running = true
   }
 
   function updateLastChecked() {
@@ -223,7 +255,7 @@ Panel {
 
   Timer {
     id: fastPollTimer
-    interval: 5000
+    interval: 10000
     running: false
     repeat: true
     onTriggered: {
@@ -242,47 +274,38 @@ Panel {
   }
 
   Process {
-    id: pingPacmanProc
-    command: ["curl", "-sI", "--connect-timeout", "6", "--max-time", "9", "https://archlinux.org/packages/"]
-    onExited: function(exitCode) {
-      var next = {}
-      for (var k in root.repoStatus) next[k] = root.repoStatus[k]
-      next.pacman = exitCode === 0 ? "online" : "offline"
-      root.repoStatus = next
+    id: pingProc
+    stdout: SplitParser {
+      onRead: function(line) {
+        var parts = line.trim().split(" ")
+        if (parts.length === 2 && (parts[1] === "online" || parts[1] === "offline"))
+          root.setRepoStatus(parts[0], parts[1])
+      }
     }
   }
 
-  Process {
-    id: pingAurProc
-    command: ["curl", "-sI", "--connect-timeout", "6", "--max-time", "9", "https://aur.archlinux.org/"]
-    onExited: function(exitCode) {
-      var next = {}
-      for (var k in root.repoStatus) next[k] = root.repoStatus[k]
-      next.aur = exitCode === 0 ? "online" : "offline"
-      root.repoStatus = next
+  // Watch the Hyprland event socket: capture the address of the first window
+  // opened right after an update is launched, then rescan once when it closes.
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event.name === "openwindow") {
+        if (root.awaitingUpdateWindow) {
+          root.watchedWindowAddress = String(event.data || "").split(",")[0]
+          root.awaitingUpdateWindow = false
+          watchCaptureTimeout.stop()
+        }
+      } else if (event.name === "closewindow") {
+        if (root.watchedWindowAddress !== "" && String(event.data || "") === root.watchedWindowAddress)
+          root.stopFastPoll()
+      }
     }
   }
 
-  Process {
-    id: pingFlatpakProc
-    command: ["curl", "-sI", "--connect-timeout", "6", "--max-time", "9", "https://flathub.org/"]
-    onExited: function(exitCode) {
-      var next = {}
-      for (var k in root.repoStatus) next[k] = root.repoStatus[k]
-      next.flatpak = exitCode === 0 ? "online" : "offline"
-      root.repoStatus = next
-    }
-  }
-
-  Process {
-    id: pingOmarchyProc
-    command: ["curl", "-sI", "--connect-timeout", "6", "--max-time", "9", "https://omarchy.org/"]
-    onExited: function(exitCode) {
-      var next = {}
-      for (var k in root.repoStatus) next[k] = root.repoStatus[k]
-      next.omarchy = exitCode === 0 ? "online" : "offline"
-      root.repoStatus = next
-    }
+  Timer {
+    id: watchCaptureTimeout
+    interval: 15000
+    onTriggered: root.awaitingUpdateWindow = false
   }
 
   WidgetButton {

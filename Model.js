@@ -11,16 +11,8 @@ function parseRepoList(raw) {
   }
 }
 
-function repoById(repos, id) {
-  for (var i = 0; i < repos.length; i++) {
-    if (repos[i].id === id) return repos[i]
-  }
-  return null
-}
-
 if (typeof module !== "undefined") {
   module.exports = {
-    parseRepoList: parseRepoList,
-    repoById: repoById
+    parseRepoList: parseRepoList
   }
 }
