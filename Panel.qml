@@ -66,6 +66,30 @@ Panel {
     return ""
   }
 
+  // One styled, elide-able string per repo card so long metadata can never
+  // render underneath the Update button.
+  function statusHtml(repo) {
+    var fg = root.fg.toString()
+    var dim = root.dim.toString()
+    var parts = []
+    if (repo.count > 0)
+      parts.push("<font color=\"" + fg + "\">" + repo.count + (repo.count === 1 ? " update" : " updates available") + "</font>")
+    else
+      parts.push("<font color=\"" + dim + "\">Up to date</font>")
+    var status = root.repoStatus[repo.id]
+    if (repo.pkgCount > 0)
+      parts.push("<font color=\"" + dim + "\">· " + repo.pkgCount + " pkgs</font>")
+    if (status === "checking")
+      parts.push("<i><font color=\"" + dim + "\">· Checking…</font></i>")
+    else if (status === "online")
+      parts.push("<font color=\"#4ade80\">● Online</font>")
+    else if (status === "offline")
+      parts.push("<font color=\"#f87171\">✗ Offline</font>")
+    if (root.lastCheckedText !== "" && status !== "checking" && status !== "idle")
+      parts.push("<font color=\"" + dim + "\">· Checked " + root.lastCheckedText + "</font>")
+    return parts.join(" ")
+  }
+
   function updateRepo(id) {
     var cmd = ""
     for (var i = 0; i < repos.length; i++) {
@@ -334,7 +358,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(520))
+    contentWidth: panel.fittedContentWidth(Style.space(560))
     contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight)
 
     PanelKeyCatcher {
@@ -452,58 +476,13 @@ Panel {
                   font.bold: true
                 }
 
-                Row {
-                  spacing: 2
-
-                  Text {
-                    text: modelData.count > 0
-                      ? modelData.count + (modelData.count === 1 ? " update" : " updates available")
-                      : "Up to date"
-                    color: modelData.count > 0 ? root.fg : root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-
-                  Text {
-                    visible: modelData.pkgCount > 0
-                    text: " · " + modelData.pkgCount + " pkgs"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-
-                  Text {
-                    visible: root.repoStatus[modelData.id] === "checking"
-                    text: " · Checking..."
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    font.italic: true
-                  }
-
-                  Text {
-                    visible: root.repoStatus[modelData.id] === "online"
-                    text: " · ● Online"
-                    color: "#4ade80"
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-
-                  Text {
-                    visible: root.repoStatus[modelData.id] === "offline"
-                    text: " · ✗ Offline"
-                    color: "#f87171"
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-
-                  Text {
-                    visible: root.lastCheckedText !== "" && root.repoStatus[modelData.id] !== "checking" && root.repoStatus[modelData.id] !== "idle"
-                    text: " · Checked " + root.lastCheckedText
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
+                Text {
+                  Layout.fillWidth: true
+                  textFormat: Text.StyledText
+                  elide: Text.ElideRight
+                  text: root.statusHtml(modelData)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
                 }
               }
 
