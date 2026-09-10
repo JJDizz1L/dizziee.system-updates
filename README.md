@@ -28,6 +28,14 @@ You can validate the plugin at any time with:
 omarchy plugin validate ~/.config/omarchy/plugins/dizziee.system-updates
 ```
 
+## Updating
+
+To pull the latest version of the plugin:
+
+```sh
+omarchy plugin update dizziee.system-updates --yes
+```
+
 ## Configuration
 Configuration lives in `~/.config/omarchy/shell.json`.
 
