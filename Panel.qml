@@ -21,7 +21,7 @@ Panel {
     }
     return filtered
   }
-  property var repoStatus: ({ "pacman": "idle", "aur": "idle", "flatpak": "idle", "omarchy": "idle" })
+  property var repoStatus: ({ "pacman": "idle", "aur": "idle", "flatpak": "idle", "appimage": "idle", "omarchy": "idle" })
   property double lastPingAt: 0
   property string lastCheckedText: ""
   property bool settingsMode: false
@@ -66,6 +66,7 @@ Panel {
     if (id === "pacman") return Qt.resolvedUrl("assets/arch-logo.svg")
     if (id === "aur") return Qt.resolvedUrl("assets/arch-logo.svg")
     if (id === "flatpak") return Qt.resolvedUrl("assets/flatpak.svg")
+    if (id === "appimage") return Qt.resolvedUrl("assets/appimage.svg")
     if (id === "omarchy") return Qt.resolvedUrl("assets/omarchy.svg")
     return ""
   }
@@ -76,10 +77,18 @@ Panel {
     var fg = root.fg.toString()
     var dim = root.dim.toString()
     var parts = []
-    if (repo.count > 0)
+    if (repo.needsTool === true)
+      parts.push("<font color=\"" + dim + "\">appimageupdatetool not installed</font>")
+    else if (repo.count > 0)
       parts.push("<font color=\"" + fg + "\">" + repo.count + (repo.count === 1 ? " update" : " updates available") + "</font>")
+    else if (repo.unchecked > 0)
+      // Partial coverage: some AppImages could not be checked, so the row
+      // must not claim "Up to date".
+      parts.push("<font color=\"" + dim + "\">No updates detected</font>")
     else
       parts.push("<font color=\"" + dim + "\">Up to date</font>")
+    if (repo.unchecked > 0)
+      parts.push("<font color=\"" + dim + "\">· " + repo.unchecked + " unchecked</font>")
     var status = root.repoStatus[repo.id]
     if (repo.pkgCount > 0)
       parts.push("<font color=\"" + dim + "\">· " + repo.pkgCount + " pkgs</font>")
@@ -98,7 +107,7 @@ Panel {
     var cmd = ""
     for (var i = 0; i < repos.length; i++) {
       if (repos[i].id === id) {
-        cmd = repos[i].updateCmd || ""
+        cmd = repos[i].needsTool === true ? (repos[i].setupCmd || "") : (repos[i].updateCmd || "")
         break
       }
     }
@@ -502,7 +511,7 @@ Panel {
               }
 
               Button {
-                text: "Update"
+                text: modelData.needsTool === true ? "Install" : "Update"
                 Layout.rightMargin: Style.space(6)
                 foreground: root.fg
                 fontFamily: root.fontFamily

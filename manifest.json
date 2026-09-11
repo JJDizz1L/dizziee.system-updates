@@ -5,14 +5,14 @@
   "version": "1.1.1",
   "author": "Dizziee",
   "license": "MIT",
-  "description": "Arch, AUR, Flatpak, and Omarchy update indicator with per-repo update buttons.",
+  "description": "Arch, AUR, Flatpak, AppImage, and Omarchy update indicator with per-repo update buttons.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "Panel.qml"
   },
   "barWidget": {
     "displayName": "System Updates",
-    "description": "Shows available updates from pacman, AUR, and Flatpak.",
+    "description": "Shows available updates from pacman, AUR, Flatpak, and AppImage.",
     "category": "System",
     "allowMultiple": false,
     "defaults": {
