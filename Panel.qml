@@ -40,7 +40,11 @@ Panel {
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(fg, 1.45)
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : "JetBrainsMono Nerd Font"
-  readonly property bool networkOnline: !Networking.canCheckConnectivity || Networking.connectivity === NetworkConnectivity.Full
+  // Only skip curl probes when NetworkManager definitively reports no
+  // connectivity. Unknown/Portal/Limited must still attempt curl (ground
+  // truth) — requiring Full here marked all repos offline when NM checks
+  // are disabled, unconfigured, or return a captive-portal/limited state.
+  readonly property bool networkOnline: !Networking.canCheckConnectivity || Networking.connectivity !== NetworkConnectivity.None
   readonly property var repoUrls: ({
     "pacman": "https://archlinux.org/packages/",
     "aur": "https://aur.archlinux.org/",
