@@ -56,10 +56,28 @@ Panel {
     if (!scannerProc.running) scannerProc.running = true
   }
 
+  property string lastCacheText: ""
+
+  // Last-good scan result on disk: the bar renders it instantly at shell
+  // start with zero spawns, and the first live scan waits for bootTimer.
+  // The file lives in ~/.cache/omarchy, which already exists.
+  readonly property string cachePath: {
+    var base = Quickshell.env("XDG_CACHE_HOME")
+    if (!base) base = Quickshell.env("HOME") + "/.cache"
+    return base + "/omarchy/dizziee.system-updates.json"
+  }
+
   function updateRepos(raw) {
-    var parsed = Model.parseRepoList(raw)
+    var text = String(raw || "")
+    var parsed = Model.parseRepoList(text)
     repos = parsed.repos
     total = parsed.total
+    // One small disk write per changed result, not per poll; the
+    // text !== lastCacheText guard also makes a write->load echo a no-op.
+    if (text !== "" && text !== lastCacheText) {
+      lastCacheText = text
+      try { cacheFile.setText(text) } catch (e) {}
+    }
   }
 
   function iconSource(id) {
@@ -113,6 +131,7 @@ Panel {
     }
     // Fallback while the terminal stays open (or if event capture fails).
     fastPollActive = true
+    fastPollTimer.interval = 10000
     fastPollTimer.restart()
 
     var launcher = "omarchy-launch-terminal"
@@ -125,6 +144,7 @@ Panel {
     awaitingUpdateWindow = false
     fastPollActive = false
     fastPollTimer.stop()
+    fastPollTimer.interval = 10000
     refresh()
   }
 
@@ -140,6 +160,8 @@ Panel {
     for (var i = 0; i < repos.length; i++) {
       var r = repos[i]
       var url = repoUrls[r.id]
+      // Every installed repo is probed — the Online/Offline badge is useful
+      // on up-to-date repos too, not just ones with updates waiting.
       if (r.installed !== true || !url) continue
       script += "(curl -sI --connect-timeout 6 --max-time 9 " + url +
         " >/dev/null 2>&1 && echo '" + r.id + " online' || echo '" + r.id + " offline') & "
@@ -153,8 +175,16 @@ Panel {
     updateLastChecked()
     var next = {}
     for (var k in repoStatus) next[k] = repoStatus[k]
-    for (var id in repoUrls) next[id] = "checking"
+    var pinged = 0
+    for (var i = 0; i < repos.length; i++) {
+      var r = repos[i]
+      if (r.installed === true && repoUrls[r.id]) {
+        next[r.id] = "checking"
+        pinged++
+      }
+    }
     repoStatus = next
+    if (pinged === 0) return
 
     if (!networkOnline) {
       var off = {}
@@ -253,6 +283,23 @@ Panel {
     if (opened) { refresh(); pingRepos() }
   }
 
+  // The Panel base auto-wires open/close/show/hide/toggle IPC, but has no
+  // headless refresh — and a second IpcHandler on the same target conflicts
+  // with it. So take over IPC wholesale (unifi-panel pattern) and re-expose
+  // the full set plus refresh, which runs a scan without opening the panel.
+  manageIpc: false
+
+  IpcHandler {
+    target: root.ipcTarget
+
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.toggle() }
+    function refresh(): void { root.refresh() }
+  }
+
   visible: total > 0 || setting("alwaysShow", true) === true
   implicitWidth: visible ? button.implicitWidth : 0
   implicitHeight: visible ? button.implicitHeight : 0
@@ -263,6 +310,20 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.updateRepos(text)
+    }
+    stderr: StdioCollector {
+      id: scannerErr
+      waitForEnd: true
+    }
+    // A failed scan used to be completely silent (empty output parses to an
+    // empty list, and nothing was logged). Surface it so the log — and the
+    // missing cache file — actually says what broke.
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        var detail = String(scannerErr.text || "").replace(/\s+/g, " ").trim()
+        console.warn("system-updates: scanner exited with code " + exitCode
+          + (detail !== "" ? ": " + detail : ""))
+      }
     }
   }
 
@@ -277,8 +338,29 @@ Panel {
     interval: Math.max(300, Number(root.setting("refreshIntervalSec", 1800))) * 1000
     running: true
     repeat: true
-    triggeredOnStart: true
     onTriggered: root.refresh()
+  }
+
+  // First live scan waits until after boot: the disk cache renders
+  // instantly, so shell startup pays no scanner cost. Opening the panel
+  // (middle-click, R key, or left-click) still scans immediately.
+  Timer {
+    id: bootTimer
+    interval: 90000
+    running: true
+    repeat: false
+    onTriggered: root.refresh()
+  }
+
+  FileView {
+    id: cacheFile
+    path: root.cachePath
+    watchChanges: false
+    printErrors: false
+    onLoaded: {
+      root.lastCacheText = String(text() || "")
+      root.updateRepos(text())
+    }
   }
 
   Timer {
@@ -289,6 +371,9 @@ Panel {
     onTriggered: {
       root.refresh()
       root.fastPollCount++
+      // Back off while the updater terminal stays open: early polls catch a
+      // quick update, later ones just keep the numbers from going stale.
+      if (root.fastPollCount >= 5) fastPollTimer.interval = 30000
       if (root.fastPollCount >= root.maxFastPolls) root.stopFastPoll()
     }
   }

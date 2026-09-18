@@ -1,0 +1,15 @@
+.agents/
+.claude/
+CLAUDE.md
+EXPECTATIONS.md
+expectations.md
+probe-out/
+__pycache__/
+*.pyc
+*.pyo
+.cache/
+*.bak
+*.bak.*
+*.orig
+*~
+.DS_Store
