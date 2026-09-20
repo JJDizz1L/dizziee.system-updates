@@ -21,7 +21,7 @@ Panel {
     }
     return filtered
   }
-  property var repoStatus: ({ "pacman": "idle", "aur": "idle", "flatpak": "idle", "omarchy": "idle" })
+  property var repoStatus: ({ "pacman": "idle", "aur": "idle", "flatpak": "idle", "omarchy": "idle", "mise": "idle" })
   property double lastPingAt: 0
   property string lastCheckedText: ""
   property bool settingsMode: false
@@ -49,7 +49,8 @@ Panel {
     "pacman": "https://archlinux.org/packages/",
     "aur": "https://aur.archlinux.org/",
     "flatpak": "https://flathub.org/",
-    "omarchy": "https://omarchy.org/"
+    "omarchy": "https://omarchy.org/",
+    "mise": "https://mise.jdx.dev/"
   })
 
   function refresh() {
@@ -85,6 +86,7 @@ Panel {
     if (id === "aur") return Qt.resolvedUrl("assets/arch-logo.svg")
     if (id === "flatpak") return Qt.resolvedUrl("assets/flatpak.svg")
     if (id === "omarchy") return Qt.resolvedUrl("assets/omarchy.svg")
+    if (id === "mise") return Qt.resolvedUrl("assets/mise.svg")
     return ""
   }
 
