@@ -73,6 +73,12 @@ The same override drives the count, so the number matches what that command will
 
 After clicking **Update**, the widget watches the Hyprland event socket (`Quickshell.Hyprland`) for the updater terminal to close, then rescans once immediately — no blind polling. A slow fallback poll (10s intervals) only runs if window tracking is unavailable. Repo reachability checks are consolidated into a single process and skipped entirely when NetworkManager reports no connectivity.
 
+## Package details
+
+Click any repo row to expand it and list the packages with updates pending, with their version change. Each package links to its **release notes** when the upstream is a known code host (GitHub, GitLab, or Codeberg), and to its **repo/homepage** otherwise. Flatpak entries link to the Flathub app page, and rows with nothing pending are not expandable.
+
+Links resolve offline from local package metadata (`expac -Q '%n|%u'`, falling back to `pacman -Qi`), Flathub app IDs, and the mise registry — no per-package network calls. The upstream URL map rides the same 24h disk cache as the package counts.
+
 ## Preview
 
 ![preview](preview.png)

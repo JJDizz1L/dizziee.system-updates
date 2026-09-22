@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dizziee.system-updates",
   "name": "System Updates",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": "Dizziee",
   "license": "MIT",
   "description": "Arch, AUR, Flatpak, Omarchy, and mise update indicator with per-repo update buttons.",

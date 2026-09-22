@@ -53,6 +53,25 @@ Panel {
     "mise": "https://mise-versions.jdx.dev/"
   })
 
+  // Rows the user has expanded to reveal their pending packages, keyed by
+  // repo id. A plain object keeps multiple rows open at once.
+  property var expandedRepos: ({})
+
+  function isRepoExpanded(id) {
+    return expandedRepos[id] === true
+  }
+
+  function toggleRepo(id) {
+    var next = {}
+    for (var key in expandedRepos) next[key] = expandedRepos[key]
+    next[id] = !next[id]
+    expandedRepos = next
+  }
+
+  function openUrl(url) {
+    if (url) Qt.openUrlExternally(url)
+  }
+
   function refresh() {
     if (!scannerProc.running) scannerProc.running = true
   }
@@ -531,73 +550,190 @@ Panel {
           model: root.installedRepos
 
           delegate: BorderSurface {
+            id: repoCard
             required property var modelData
+
+            readonly property var packages: modelData.packages || []
+            readonly property bool expandable: packages.length > 0
+            readonly property bool expanded: root.isRepoExpanded(modelData.id)
+
             Layout.fillWidth: true
             color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.055)
             borderSpec: Border.flat(Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.08), 1)
             radius: Style.cornerRadius
             padding: Style.space(10)
 
-            implicitHeight: repoRow.implicitHeight + contentTopInset + contentBottomInset
+            implicitHeight: repoColumn.implicitHeight + contentTopInset + contentBottomInset
 
-            RowLayout {
-              id: repoRow
-              anchors.fill: parent
+            ColumnLayout {
+              id: repoColumn
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.leftMargin: repoCard.contentLeftInset
+              anchors.rightMargin: repoCard.contentRightInset
+              anchors.topMargin: repoCard.contentTopInset
               spacing: Style.space(6)
 
-              Image {
-                source: root.iconSource(modelData.id)
-                Layout.preferredWidth: Style.space(20)
-                Layout.preferredHeight: Style.space(20)
-                sourceSize.width: Style.space(20)
-                sourceSize.height: Style.space(20)
-                Layout.leftMargin: Style.space(6)
-                fillMode: Image.PreserveAspectFit
-                Layout.alignment: Qt.AlignVCenter
-              }
+              // Header. The MouseArea sits under the row, so clicks on the
+              // text or whitespace toggle the row while the Update button
+              // keeps its own clicks.
+              Item {
+                Layout.fillWidth: true
+                implicitHeight: repoRow.implicitHeight
 
-              ColumnLayout {
-                spacing: 1
-
-                Text {
-                  text: modelData.name
-                  color: root.fg
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  font.bold: true
+                MouseArea {
+                  anchors.fill: parent
+                  enabled: repoCard.expandable
+                  hoverEnabled: repoCard.expandable
+                  cursorShape: repoCard.expandable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  onClicked: root.toggleRepo(repoCard.modelData.id)
                 }
 
-                Text {
-                  Layout.fillWidth: true
-                  textFormat: Text.StyledText
-                  elide: Text.ElideRight
-                  text: root.statusHtml(modelData)
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                RowLayout {
+                  id: repoRow
+                  anchors.fill: parent
+                  spacing: Style.space(6)
+
+                  Image {
+                    source: root.iconSource(modelData.id)
+                    Layout.preferredWidth: Style.space(20)
+                    Layout.preferredHeight: Style.space(20)
+                    sourceSize.width: Style.space(20)
+                    sourceSize.height: Style.space(20)
+                    Layout.leftMargin: Style.space(6)
+                    fillMode: Image.PreserveAspectFit
+                    Layout.alignment: Qt.AlignVCenter
+                  }
+
+                  ColumnLayout {
+                    spacing: 1
+
+                    Text {
+                      text: modelData.name
+                      color: root.fg
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                    }
+
+                    Text {
+                      Layout.fillWidth: true
+                      textFormat: Text.StyledText
+                      elide: Text.ElideRight
+                      text: root.statusHtml(modelData)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+
+                  Item { Layout.fillWidth: true }
+
+                  Text {
+                    visible: root.pendingRepo === modelData.id && root.fastPollActive
+                    text: "\u2026"
+                    color: root.fg
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    Layout.alignment: Qt.AlignVCenter
+                  }
+
+                  Text {
+                    visible: repoCard.expandable
+                    text: repoCard.expanded ? "\uF078" : "\uF054"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    Layout.alignment: Qt.AlignVCenter
+                  }
+
+                  Button {
+                    text: "Update"
+                    Layout.rightMargin: Style.space(6)
+                    foreground: root.fg
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.spacing.controlPaddingX
+                    verticalPadding: Style.spacing.controlPaddingY
+                    active: true
+                    onClicked: { root.updateRepo(modelData.id); root.close() }
+                  }
                 }
               }
 
-              Item { Layout.fillWidth: true }
+              // Expanded package list. Each package links to its release notes
+              // when the upstream is a known code host, else to its repo. The
+              // list is capped and scrolls so a large batch can't overflow the
+              // panel.
+              Flickable {
+                id: packageList
+                visible: repoCard.expanded
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(packagesColumn.implicitHeight, Style.space(260))
+                contentWidth: width
+                contentHeight: packagesColumn.implicitHeight
+                clip: true
+                interactive: contentHeight > height
+                boundsBehavior: Flickable.StopAtBounds
 
-              Text {
-                visible: root.pendingRepo === modelData.id && root.fastPollActive
-                text: "\u2026"
-                color: root.fg
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                Layout.alignment: Qt.AlignVCenter
-              }
+                ColumnLayout {
+                  id: packagesColumn
+                  width: parent.width
+                  spacing: Style.space(2)
 
-              Button {
-                text: "Update"
-                Layout.rightMargin: Style.space(6)
-                foreground: root.fg
-                fontFamily: root.fontFamily
-                fontSize: Style.font.caption
-                horizontalPadding: Style.spacing.controlPaddingX
-                verticalPadding: Style.spacing.controlPaddingY
-                active: true
-                onClicked: { root.updateRepo(modelData.id); root.close() }
+                  Repeater {
+                    model: repoCard.packages
+
+                    delegate: RowLayout {
+                      required property var modelData
+                      Layout.fillWidth: true
+                      spacing: Style.space(8)
+
+                      Text {
+                        Layout.fillWidth: true
+                        text: modelData.name
+                        color: root.fg
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        elide: Text.ElideRight
+                      }
+
+                      Text {
+                        visible: (modelData.from || "") !== "" || (modelData.to || "") !== ""
+                        text: ((modelData.from || "") !== "" ? modelData.from + " \u2192 " : "") + (modelData.to || "")
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        Layout.alignment: Qt.AlignVCenter
+                      }
+
+                      Text {
+                        id: linkText
+                        visible: (modelData.url || "") !== ""
+                        text: modelData.label || "Repo"
+                        color: linkMouse.containsMouse ? root.fg : Color.accent
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.underline: linkMouse.containsMouse
+                        Layout.alignment: Qt.AlignVCenter
+
+                        MouseArea {
+                          id: linkMouse
+                          anchors.fill: parent
+                          hoverEnabled: true
+                          cursorShape: Qt.PointingHandCursor
+                          onClicked: root.openUrl(modelData.url)
+                        }
+
+                        PanelToolTip {
+                          visible: linkMouse.containsMouse
+                          text: modelData.url || ""
+                          fontFamily: root.fontFamily
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
