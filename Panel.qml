@@ -50,7 +50,7 @@ Panel {
     "aur": "https://aur.archlinux.org/",
     "flatpak": "https://flathub.org/",
     "omarchy": "https://omarchy.org/",
-    "mise": "https://mise.jdx.dev/"
+    "mise": "https://mise-versions.jdx.dev/"
   })
 
   function refresh() {
