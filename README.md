@@ -1,12 +1,13 @@
 # dizziee.system-updates
 
-System update indicator for the Omarchy bar. Shows available updates from pacman, AUR, Flatpak, and Omarchy, with per-repo update buttons.
+System update indicator for the Omarchy bar. Shows available updates from pacman, AUR, Flatpak, Omarchy, and mise, with per-repo update buttons.
 
 ## Requirements
 
 - `checkupdates` (from `pacman-contrib`)
 - AUR helper (`yay`, `paru`, etc.) — optional, AUR detection is automatic
 - `flatpak` — optional
+- `mise` — optional, ships with Omarchy
 
 ## Installation
 
@@ -54,9 +55,19 @@ sudo env OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu
 
 Omarchy installs a pacman hook (`omarchy-update-pacman-guard`) that aborts a bare `sudo pacman -Syu` to route updates through `omarchy update` — which handles the transcript, snapshot, keyrings, migrations, and post-update hooks. The `OMARCHY_ALLOW_DIRECT_PACMAN=1` env var opts this one transaction past that guard: it upgrades packages directly and skips Omarchy's update pipeline. For the full managed flow, run `omarchy update` instead.
 
-AUR updates run through your helper (`yay -Sua` / `paru -Sua`) and Flatpak through `flatpak update`.
+AUR updates run through your helper (`yay -Sua` / `paru -Sua`), Flatpak through `flatpak update`, and mise through `mise up`.
 
 The **Omarchy** update button opens your terminal and runs `omarchy update` — the full managed Omarchy update pipeline (transcript, snapshot, keyrings, migrations, and post-update hooks).
+
+### mise
+
+The **mise** row counts the tools configured in your global `~/.config/mise/config.toml`, so a stale `claude`, `codex`, or `opencode` pin shows up alongside your system packages. It mirrors what Omarchy's own `omarchy-update-mise` installs by dropping mise's release cooldown:
+
+```sh
+MISE_MINIMUM_RELEASE_AGE=0 mise up
+```
+
+The same override drives the count, so the number matches what that command will pull in. On mise builds that reject the override, the widget falls back to the plain `mise outdated --json` query instead of reporting a false "up to date".
 
 ### Event-driven refresh
 

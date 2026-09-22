@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Arch, AUR, Flatpak, and Omarchy for available updates."""
+"""Check Arch, AUR, Flatpak, Omarchy, and mise for available updates."""
 
 from __future__ import annotations
 
@@ -129,6 +129,79 @@ def check_omarchy() -> int:
         return 0
 
 
+def mise_binary() -> str | None:
+    return shutil.which("mise")
+
+
+def run_mise_outdated(binary: str, release_age: str | None) -> dict[str, Any] | None:
+    """Run `mise outdated --json` and return the parsed object, or None on failure.
+
+    mise resolves the current directory's config, so pin cwd to the user's home
+    to read the global config instead of an incidental project directory.
+    """
+    env = os.environ.copy()
+    if release_age is not None:
+        env["MISE_MINIMUM_RELEASE_AGE"] = release_age
+    try:
+        result = subprocess.run(
+            [binary, "outdated", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=os.path.expanduser("~"),
+            env=env,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    # Some mise builds reject MISE_MINIMUM_RELEASE_AGE=0 ("Invalid date or
+    # duration: 0") but still print "{}" with exit 0, which would read as
+    # "everything current". Treat that as a failed probe so the caller can
+    # retry without the override.
+    if release_age is not None and "invalid date or duration" in result.stderr.lower():
+        return None
+    return data
+
+
+def check_mise(binary: str | None) -> int:
+    if binary is None:
+        return 0
+    # Mirror what `omarchy update` installs: omarchy-update-mise runs
+    # `MISE_MINIMUM_RELEASE_AGE=0 mise up`, so drop mise's release cooldown to
+    # count the versions that command would actually pull in. Fall back to the
+    # plain query on mise builds that reject the override.
+    outdated = run_mise_outdated(binary, "0")
+    if outdated is None:
+        outdated = run_mise_outdated(binary, None)
+    return len(outdated) if outdated is not None else 0
+
+
+def mise_tool_count(binary: str | None) -> int:
+    if binary is None:
+        return 0
+    try:
+        result = subprocess.run(
+            [binary, "ls", "--current", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=os.path.expanduser("~"),
+        )
+        if result.returncode != 0:
+            return 0
+        data = json.loads(result.stdout)
+        return len(data) if isinstance(data, dict) else 0
+    except Exception:
+        return 0
+
+
 def aur_update_cmd(helper: str | None) -> str:
     if helper is None:
         return ""
@@ -152,38 +225,48 @@ def collect_repo(id: str, name: str, count: int, pkg_count: int, icon: str, upda
 def main() -> int:
     helper = aur_helper()
     flatpak_installed = shutil.which("flatpak") is not None
+    mise = mise_binary()
 
     cached_counts = load_pkg_counts()
+    # A cache written before the mise source existed lacks its key; recompute
+    # the whole inventory once rather than reporting 0 mise tools for a day.
+    if cached_counts is not None and "mise" not in cached_counts:
+        cached_counts = None
 
     # Repo checks hit the network and are independent; run them concurrently so
     # total scan time is the slowest single check instead of the sum of all.
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         f_pacman = pool.submit(check_pacman)
         f_aur = pool.submit(check_aur, helper)
         f_flatpak = pool.submit(check_flatpak) if flatpak_installed else None
         f_omarchy = pool.submit(check_omarchy)
+        f_mise = pool.submit(check_mise, mise) if mise is not None else None
 
     pacman_count = f_pacman.result()
     aur_count = f_aur.result()
     flatpak_count = f_flatpak.result() if f_flatpak else 0
     omarchy_count = f_omarchy.result()
+    mise_count = f_mise.result() if f_mise else 0
 
     if cached_counts is not None:
         pacman_pkgs = cached_counts.get("pacman", 0)
         aur_pkgs = cached_counts.get("aur", 0) if helper is not None else 0
         flatpak_pkgs = cached_counts.get("flatpak", 0) if flatpak_installed else 0
         omarchy_pkgs = cached_counts.get("omarchy", 0)
+        mise_pkgs = cached_counts.get("mise", 0) if mise is not None else 0
     else:
         installed = installed_pkg_names()
         pacman_pkgs = len(installed)
         aur_pkgs = aur_pkg_count() if helper is not None else 0
         flatpak_pkgs = flatpak_pkg_count() if flatpak_installed else 0
         omarchy_pkgs = omarchy_pkg_count(installed)
+        mise_pkgs = mise_tool_count(mise) if mise is not None else 0
         save_pkg_counts({
             "pacman": pacman_pkgs,
             "aur": aur_pkgs,
             "flatpak": flatpak_pkgs,
             "omarchy": omarchy_pkgs,
+            "mise": mise_pkgs,
         })
 
     repos = [
@@ -199,9 +282,12 @@ def main() -> int:
         collect_repo("omarchy", "Omarchy", omarchy_count, omarchy_pkgs, "omarchy.svg",
             "omarchy update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             True),
+        collect_repo("mise", "mise", mise_count, mise_pkgs, "mise.svg",
+            "MISE_MINIMUM_RELEASE_AGE=0 mise up; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
+            mise is not None),
     ]
 
-    total = pacman_count + aur_count + flatpak_count + omarchy_count
+    total = pacman_count + aur_count + flatpak_count + omarchy_count + mise_count
 
     result = {
         "repos": repos,
