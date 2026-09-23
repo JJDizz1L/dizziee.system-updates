@@ -105,6 +105,7 @@ Panel {
     if (id === "aur") return Qt.resolvedUrl("assets/arch-logo.svg")
     if (id === "flatpak") return Qt.resolvedUrl("assets/flatpak.svg")
     if (id === "omarchy") return Qt.resolvedUrl("assets/omarchy.svg")
+    if (id === "plugins") return Qt.resolvedUrl("assets/plugins.svg")
     if (id === "mise") return Qt.resolvedUrl("assets/mise.svg")
     return ""
   }

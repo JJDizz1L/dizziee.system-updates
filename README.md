@@ -1,6 +1,6 @@
 # dizziee.system-updates
 
-System update indicator for the Omarchy bar. Shows available updates from pacman, AUR, Flatpak, Omarchy, and mise, with per-repo update buttons.
+System update indicator for the Omarchy bar. Shows available updates from pacman, AUR, Flatpak, Omarchy, Omarchy shell plugins, and mise, with per-repo update buttons.
 
 ## Requirements
 
@@ -8,6 +8,7 @@ System update indicator for the Omarchy bar. Shows available updates from pacman
 - AUR helper (`yay`, `paru`, etc.) — optional, AUR detection is automatic
 - `flatpak` — optional
 - `mise` — optional, ships with Omarchy
+- `git` — optional, for the Plugins row (git-managed shell plugins)
 
 ## Installation
 
@@ -59,6 +60,16 @@ AUR updates run through your helper (`yay -Sua` / `paru -Sua`), Flatpak through 
 
 The **Omarchy** update button opens your terminal and runs `omarchy update` — the full managed Omarchy update pipeline (transcript, snapshot, keyrings, migrations, and post-update hooks).
 
+### Plugins
+
+The **Plugins** row tracks the git-managed Omarchy shell plugins under `~/.config/omarchy/plugins`. For each one it fetches `origin` and counts how many commits `HEAD` is behind, mirroring what `omarchy-plugin-update` does. Its update button runs:
+
+```sh
+omarchy plugin update --yes
+```
+
+Only plugins that are git checkouts are considered; non-git plugins and plugins with no upstream are ignored. The row is hidden when no git-managed plugins are installed.
+
 ### mise
 
 The **mise** row counts the tools configured in your global `~/.config/mise/config.toml`, so a stale `claude`, `codex`, or `opencode` pin shows up alongside your system packages. It mirrors what Omarchy's own `omarchy-update-mise` installs by dropping mise's release cooldown:
@@ -77,7 +88,7 @@ After clicking **Update**, the widget watches the Hyprland event socket (`Quicks
 
 Click any repo row to expand it and list the packages with updates pending, with their version change. Each package links to its **release notes** when the upstream is a known code host (GitHub, GitLab, or Codeberg), and to its **repo/homepage** otherwise. Flatpak entries link to the Flathub app page, and rows with nothing pending are not expandable.
 
-Links resolve offline from local package metadata (`expac -Q '%n|%u'`, falling back to `pacman -Qi`), Flathub app IDs, and the mise registry — no per-package network calls. The upstream URL map rides the same 24h disk cache as the package counts.
+Links resolve offline from local package metadata (`expac -Q '%n|%u'`, falling back to `pacman -Qi`), Flathub app IDs, the mise registry, and each plugin's git remote (SSH remotes are rewritten to https) — no per-package network calls. The upstream URL map rides the same 24h disk cache as the package counts.
 
 ## Preview
 

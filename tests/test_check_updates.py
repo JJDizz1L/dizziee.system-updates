@@ -274,6 +274,92 @@ class WithLinksTests(unittest.TestCase):
         self.assertEqual(result[0]["url"], "https://fallback/foo")
 
 
+class NormalizeRemoteTests(unittest.TestCase):
+    def test_scp_style_ssh_remote(self):
+        self.assertEqual(
+            check_updates.normalize_remote("git@github.com:dbachelder/omarchy-istats.git"),
+            "https://github.com/dbachelder/omarchy-istats",
+        )
+
+    def test_ssh_url_remote(self):
+        self.assertEqual(
+            check_updates.normalize_remote("ssh://git@github.com/owner/repo.git"),
+            "https://github.com/owner/repo",
+        )
+
+    def test_https_passthrough(self):
+        self.assertEqual(
+            check_updates.normalize_remote("https://github.com/owner/repo.git"),
+            "https://github.com/owner/repo.git",
+        )
+
+    def test_other_scheme_passthrough(self):
+        self.assertEqual(
+            check_updates.normalize_remote("git://example.org/repo"),
+            "git://example.org/repo",
+        )
+
+    def test_empty(self):
+        self.assertEqual(check_updates.normalize_remote(None), "")
+
+
+class PluginUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self._real = check_updates._run_git
+        self.responses = {}
+        check_updates._run_git = self._fake
+        self.addCleanup(lambda: setattr(check_updates, "_run_git", self._real))
+
+    def _fake(self, args, cwd, timeout=None):
+        key = " ".join(args)
+        if key in self.responses:
+            return self.responses[key]
+        if args[0] == "fetch":
+            return completed()
+        return completed(returncode=1)
+
+    def test_reports_plugin_behind_origin(self):
+        self.responses["rev-parse HEAD"] = completed(stdout="aaaaaaa1111")
+        self.responses["rev-parse FETCH_HEAD"] = completed(stdout="bbbbbbb2222")
+        self.responses["rev-list --count HEAD..FETCH_HEAD"] = completed(stdout="3")
+        self.responses["remote get-url origin"] = completed(
+            stdout="git@github.com:owner/repo.git"
+        )
+        entry = check_updates.plugin_update(Path("/plugins/cool-plugin"))
+        self.assertEqual(entry["name"], "cool-plugin")
+        self.assertEqual(entry["from"], "aaaaaaa")
+        self.assertEqual(entry["to"], "3 new commits")
+        self.assertEqual(entry["upstream"], "git@github.com:owner/repo.git")
+
+    def test_single_commit_label_is_singular(self):
+        self.responses["rev-parse HEAD"] = completed(stdout="aaaaaaa1111")
+        self.responses["rev-parse FETCH_HEAD"] = completed(stdout="bbbbbbb2222")
+        self.responses["rev-list --count HEAD..FETCH_HEAD"] = completed(stdout="1")
+        self.assertEqual(check_updates.plugin_update(Path("/plugins/p"))["to"], "1 new commit")
+
+    def test_up_to_date_is_none(self):
+        self.responses["rev-parse HEAD"] = completed(stdout="same")
+        self.responses["rev-parse FETCH_HEAD"] = completed(stdout="same")
+        self.assertIsNone(check_updates.plugin_update(Path("/plugins/p")))
+
+    def test_fetch_failure_is_none(self):
+        self.responses["fetch --quiet origin HEAD"] = completed(returncode=1)
+        self.assertIsNone(check_updates.plugin_update(Path("/plugins/p")))
+
+    def test_check_plugins_skips_current(self):
+        def fake(dir_path):
+            return None if dir_path.name == "current" else {"name": dir_path.name}
+
+        self._real = check_updates.plugin_update
+        check_updates.plugin_update = fake
+        self.addCleanup(lambda: setattr(check_updates, "plugin_update", self._real))
+        result = check_updates.check_plugins([Path("/plugins/behind"), Path("/plugins/current")])
+        self.assertEqual([p["name"] for p in result], ["behind"])
+
+    def test_check_plugins_empty(self):
+        self.assertEqual(check_updates.check_plugins([]), [])
+
+
 class MainIntegrationTests(unittest.TestCase):
     """main() must surface per-repo package detail and include mise in the total."""
 
@@ -291,6 +377,11 @@ class MainIntegrationTests(unittest.TestCase):
             "installed_pkg_names": lambda: set(),
             "installed_upstream_urls": lambda: {"linux": "https://github.com/torvalds/linux"},
             "omarchy_pkg_count": lambda installed: 0,
+            "git_plugin_dirs": lambda: [Path("/plugins/one"), Path("/plugins/two")],
+            "check_plugins": lambda dirs: [
+                {"name": "one", "from": "abc1234", "to": "2 new commits",
+                 "upstream": "git@github.com:owner/one.git"}
+            ],
             "load_cache": lambda: None,
             "save_cache": lambda counts, urls: self.saved.update(counts),
         }.items():
@@ -322,8 +413,20 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(mise[0]["pkgCount"], 8)
         self.assertTrue(mise[0]["installed"])
         self.assertIn("mise up", mise[0]["updateCmd"])
-        self.assertEqual(result["total"], 5)
+        self.assertEqual(result["total"], 6)
         self.assertEqual(self.saved["mise"], 8)
+
+    def test_reports_plugins_row(self):
+        result = self._run()
+        plugins = [r for r in result["repos"] if r["id"] == "plugins"][0]
+        self.assertTrue(plugins["installed"])
+        self.assertEqual(plugins["count"], 1)
+        self.assertEqual(plugins["pkgCount"], 2)
+        self.assertIn("omarchy plugin update", plugins["updateCmd"])
+        package = plugins["packages"][0]
+        # The plugin's own SSH remote becomes an https release-notes link.
+        self.assertEqual(package["url"], "https://github.com/owner/one/releases")
+        self.assertEqual(package["label"], "Release notes")
 
     def test_emits_packages_with_links(self):
         result = self._run()
@@ -345,7 +448,15 @@ class MainIntegrationTests(unittest.TestCase):
         result = self._run()
         mise = [r for r in result["repos"] if r["id"] == "mise"][0]
         self.assertFalse(mise["installed"])
-        self.assertEqual(result["total"], 3)
+        self.assertEqual(result["total"], 4)
+
+    def test_plugins_row_hidden_when_none_installed(self):
+        check_updates.git_plugin_dirs = lambda: []
+        result = self._run()
+        plugins = [r for r in result["repos"] if r["id"] == "plugins"][0]
+        self.assertFalse(plugins["installed"])
+        self.assertEqual(plugins["count"], 0)
+        self.assertEqual(result["total"], 5)
 
 
 if __name__ == "__main__":
