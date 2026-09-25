@@ -2,17 +2,17 @@
   "schemaVersion": 1,
   "id": "dizziee.system-updates",
   "name": "System Updates",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "author": "Dizziee",
   "license": "MIT",
-  "description": "Arch, AUR, Flatpak, Omarchy, and mise update indicator with per-repo update buttons.",
+  "description": "Arch, AUR, Flatpak, Omarchy, plugins, and mise update indicator with per-repo update buttons.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "Panel.qml"
   },
   "barWidget": {
     "displayName": "System Updates",
-    "description": "Shows available updates from pacman, AUR, Flatpak, Omarchy, and mise.",
+    "description": "Shows available updates from pacman, AUR, Flatpak, Omarchy, Omarchy shell plugins, and mise.",
     "category": "System",
     "allowMultiple": false,
     "defaults": {

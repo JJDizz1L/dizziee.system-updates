@@ -5,17 +5,39 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-# Inventory counts ("N pkgs" captions) change only when packages are
-# installed/removed, so they ride a 24h disk cache instead of being
-# re-queried on every poll. Update counts stay live every run.
+# Inventory counts ("N pkgs" captions) and package upstream URLs change only
+# when packages are installed/removed, so they ride a 24h disk cache instead
+# of being re-queried on every poll. Update counts stay live every run.
 PKG_COUNTS_TTL_S = 24 * 3600
+
+# The Omarchy row has no per-package metadata of its own; both the packaged
+# build and a dev checkout upstream to the same repository.
+OMARCHY_REPO = "https://github.com/basecamp/omarchy"
+MISE_REGISTRY_URL = "https://mise.jdx.dev/registry.html"
+
+# `checkupdates`, `pacman -Qu`, and `yay/paru -Qua` all print
+# "name oldver -> newver".
+VERSION_LINE_RE = re.compile(r"^(\S+)\s+(\S+)\s+->\s+(\S+)$")
+GITHUB_RE = re.compile(r"^https?://(?:www\.)?github\.com/([^/]+)/([^/#?]+)", re.I)
+GITLAB_HOST_RE = re.compile(r"^https?://(?:www\.)?(gitlab[^/]*)\.([^/]+)/", re.I)
+CODEBERG_RE = re.compile(r"^https?://(?:www\.)?codeberg\.org/([^/]+)/([^/#?]+)", re.I)
+# mise registry backends that name a GitHub repository directly.
+MISE_GITHUB_BACKEND_RE = re.compile(r"^(?:aqua|github):([^/\s]+)/([^/\s]+)$")
+# git@host:owner/repo and ssh://git@host/owner/repo remotes.
+SSH_REMOTE_RE = re.compile(r"^(?:ssh://)?(?:[^@/]+@)?([^:/]+)[:/](.+)$")
+
+# Omarchy shell plugins are git checkouts under this directory; "updates" are
+# commits fetched from origin that HEAD is behind.
+PLUGINS_DIR = Path(os.path.expanduser("~")) / ".config" / "omarchy" / "plugins"
+GIT_FETCH_TIMEOUT_S = 15
 
 
 def pkg_counts_cache_path() -> Path:
@@ -25,26 +47,32 @@ def pkg_counts_cache_path() -> Path:
     return Path(base) / "omarchy" / "dizziee.system-updates-pkgcounts.json"
 
 
-def load_pkg_counts() -> dict[str, int] | None:
+def load_cache() -> dict[str, Any] | None:
+    """Return {"counts": {...}, "urls": {...}} from the 24h cache, or None."""
     try:
         path = pkg_counts_cache_path()
         if not path.is_file():
             return None
         if time.time() - path.stat().st_mtime > PKG_COUNTS_TTL_S:
             return None
-        counts = json.loads(path.read_text()).get("counts")
-        if not isinstance(counts, dict):
+        data = json.loads(path.read_text())
+        counts = data.get("counts")
+        urls = data.get("urls")
+        if not isinstance(counts, dict) or not isinstance(urls, dict):
             return None
-        return {str(k): int(v) for k, v in counts.items()}
+        return {
+            "counts": {str(k): int(v) for k, v in counts.items()},
+            "urls": {str(k): str(v) for k, v in urls.items()},
+        }
     except Exception:
         return None
 
 
-def save_pkg_counts(counts: dict[str, int]) -> None:
+def save_cache(counts: dict[str, int], urls: dict[str, str]) -> None:
     try:
         path = pkg_counts_cache_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"counts": counts}))
+        path.write_text(json.dumps({"counts": counts, "urls": urls}))
     except Exception:
         pass
 
@@ -57,6 +85,141 @@ def count_lines(command: list[str], timeout: int = 30) -> int:
         return len([line for line in result.stdout.strip().split("\n") if line.strip()])
     except Exception:
         return 0
+
+
+def command_lines(command: list[str], timeout: int = 30, require_ok: bool = True) -> list[str]:
+    """Run a command and return its non-empty stdout lines.
+
+    require_ok=False keeps stdout on a nonzero exit: checkupdates exits 2 with
+    no output when everything is current, and some helpers are noisy on exit.
+    """
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        if require_ok and result.returncode != 0:
+            return []
+        return [line for line in result.stdout.splitlines() if line.strip()]
+    except Exception:
+        return []
+
+
+def parse_version_lines(lines: list[str]) -> list[dict[str, str]]:
+    """Parse "name oldver -> newver" lines into package entries."""
+    packages = []
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        match = VERSION_LINE_RE.match(line)
+        if match:
+            packages.append({"name": match.group(1), "from": match.group(2), "to": match.group(3)})
+            continue
+        parts = line.split()
+        packages.append(
+            {"name": parts[0], "from": "", "to": parts[1] if len(parts) > 1 else ""}
+        )
+    return packages
+
+
+def installed_upstream_urls() -> dict[str, str]:
+    """Map installed package name -> upstream URL from local package metadata."""
+    if shutil.which("expac"):
+        urls: dict[str, str] = {}
+        for line in command_lines(["expac", "-Q", "%n|%u"]):
+            name, _, url = line.partition("|")
+            if name.strip() and url.strip():
+                urls[name.strip()] = url.strip()
+        return urls
+    # Fallback when expac is missing: one bulk `pacman -Qi` parse.
+    try:
+        result = subprocess.run(["pacman", "-Qi"], capture_output=True, text=True, timeout=60)
+    except Exception:
+        return {}
+    urls = {}
+    name = None
+    for line in result.stdout.splitlines():
+        if line.startswith("Name "):
+            name = line.split(":", 1)[1].strip()
+        elif line.startswith("URL ") and name:
+            urls[name] = line.split(":", 1)[1].strip()
+    return urls
+
+
+def normalize_remote(url: str | None) -> str:
+    """Turn a git remote into an https URL (handles git@host:owner/repo)."""
+    value = (url or "").strip()
+    if not value or value.lower().startswith(("http://", "https://")):
+        return value
+    if "://" in value and not value.lower().startswith("ssh://"):
+        return value
+    match = SSH_REMOTE_RE.match(value)
+    if match:
+        host = match.group(1)
+        path = re.sub(r"\.git$", "", match.group(2)).strip("/")
+        if host and path:
+            return f"https://{host}/{path}"
+    return value
+
+
+def resolve_link(
+    upstream: str | None, fallback_url: str = "", fallback_label: str = "Repo"
+) -> dict[str, str]:
+    """Pick a package link: release notes on known code hosts, else the repo.
+
+    Heuristic and offline — no per-package network probe. GitHub, GitLab, and
+    Codeberg upstreams get their releases page; anything else links to the
+    upstream URL itself, and a missing upstream falls back to the registry page.
+    """
+    url = normalize_remote(upstream)
+    if url:
+        match = GITHUB_RE.match(url)
+        if match:
+            repo = re.sub(r"\.git$", "", match.group(2))
+            return {
+                "url": f"https://github.com/{match.group(1)}/{repo}/releases",
+                "label": "Release notes",
+            }
+        if GITLAB_HOST_RE.match(url):
+            base = url.split("/-/")[0].split("/tree/")[0].rstrip("/")
+            return {"url": base + "/-/releases", "label": "Release notes"}
+        match = CODEBERG_RE.match(url)
+        if match:
+            repo = re.sub(r"\.git$", "", match.group(2))
+            return {
+                "url": f"https://codeberg.org/{match.group(1)}/{repo}/releases",
+                "label": "Release notes",
+            }
+        return {"url": url, "label": "Repo"}
+    return {"url": fallback_url, "label": fallback_label}
+
+
+def with_links(
+    packages: list[dict[str, str]],
+    upstream_urls: dict[str, str],
+    fallback: Callable[[str], str],
+) -> list[dict[str, str]]:
+    linked = []
+    for package in packages:
+        # A package may carry its own `upstream` (e.g. a plugin's git remote);
+        # otherwise fall back to the shared name -> URL map.
+        upstream = package.get("upstream") or upstream_urls.get(package["name"])
+        link = resolve_link(upstream, fallback(package["name"]))
+        entry = {k: v for k, v in package.items() if k != "upstream"}
+        entry["url"] = link["url"]
+        entry["label"] = link["label"]
+        linked.append(entry)
+    return linked
+
+
+def arch_fallback_url(name: str) -> str:
+    return f"https://archlinux.org/packages/?q={name}"
+
+
+def aur_fallback_url(name: str) -> str:
+    return f"https://aur.archlinux.org/packages/{name}"
+
+
+def flatpak_fallback_url(name: str) -> str:
+    return f"https://flathub.org/apps/{name}"
 
 
 def aur_helper() -> str | None:
@@ -97,36 +260,127 @@ def omarchy_pkg_count(installed: set[str]) -> int:
         return 0
 
 
-def check_pacman() -> int:
+def check_pacman() -> list[dict[str, str]]:
     if shutil.which("checkupdates") is None:
-        return 0
-    return count_lines(["checkupdates"])
+        return []
+    # checkupdates exits 2 (with no output) when everything is current.
+    return parse_version_lines(command_lines(["checkupdates"], require_ok=False))
 
 
-def check_aur(helper: str | None) -> int:
+def check_aur(helper: str | None) -> list[dict[str, str]]:
     if helper is None:
-        return 0
+        return []
     if helper == "checkupdates-aur":
-        return count_lines([helper])
-    return count_lines([helper, "-Qua"])
+        return parse_version_lines(command_lines([helper], require_ok=False))
+    return parse_version_lines(command_lines([helper, "-Qua"], require_ok=False))
 
 
-def check_flatpak() -> int:
+def check_flatpak() -> list[dict[str, str]]:
     if shutil.which("flatpak") is None:
-        return 0
-    return count_lines(["flatpak", "remote-ls", "--updates"])
+        return []
+    lines = command_lines(
+        ["flatpak", "remote-ls", "--updates", "--columns=application,version"],
+        require_ok=False,
+    )
+    packages = []
+    for line in lines:
+        parts = line.split()
+        if not parts:
+            continue
+        packages.append({"name": parts[0], "from": "", "to": parts[-1] if len(parts) > 1 else ""})
+    return packages
 
 
-def check_omarchy() -> int:
+def check_omarchy() -> list[dict[str, str]]:
     if shutil.which("omarchy-update-available") is None:
-        return 0
+        return []
     try:
         result = subprocess.run(
             ["omarchy-update-available"], capture_output=True, text=True, timeout=30
         )
-        return 1 if result.returncode == 0 else 0
     except Exception:
-        return 0
+        return []
+    if result.returncode != 0:
+        return []
+    packages = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = VERSION_LINE_RE.match(line)
+        if match:
+            packages.append(
+                {"name": match.group(1), "from": match.group(2), "to": match.group(3)}
+            )
+        else:
+            parts = line.split()
+            packages.append({"name": parts[0], "from": "", "to": " ".join(parts[1:])})
+    return packages
+
+
+def git_plugin_dirs() -> list[Path]:
+    """Installed Omarchy shell plugins that are git checkouts."""
+    try:
+        if not PLUGINS_DIR.is_dir():
+            return []
+        return sorted(d for d in PLUGINS_DIR.iterdir() if (d / ".git").is_dir())
+    except Exception:
+        return []
+
+
+def _run_git(args: list[str], cwd: Path, timeout: int = GIT_FETCH_TIMEOUT_S):
+    try:
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+        return subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    except Exception:
+        return None
+
+
+def plugin_update(dir_path: Path) -> dict[str, str] | None:
+    """Return a package entry for a plugin behind origin, else None.
+
+    Mirrors `omarchy-plugin-update`: fetch origin HEAD, then compare HEAD to
+    FETCH_HEAD. Offline or non-fast-forwardable plugins are simply skipped.
+    """
+    fetch = _run_git(["fetch", "--quiet", "origin", "HEAD"], dir_path)
+    if fetch is None or fetch.returncode != 0:
+        return None
+    head = _run_git(["rev-parse", "HEAD"], dir_path)
+    upstream = _run_git(["rev-parse", "FETCH_HEAD"], dir_path)
+    if head is None or upstream is None or head.returncode != 0 or upstream.returncode != 0:
+        return None
+    head_sha = head.stdout.strip()
+    upstream_sha = upstream.stdout.strip()
+    if not head_sha or not upstream_sha or head_sha == upstream_sha:
+        return None
+    behind = _run_git(["rev-list", "--count", "HEAD..FETCH_HEAD"], dir_path)
+    count = behind.stdout.strip() if behind is not None and behind.returncode == 0 else ""
+    label = f"{count} new commit" + ("" if count == "1" else "s") if count and count != "0" else upstream_sha[:7]
+    remote = _run_git(["remote", "get-url", "origin"], dir_path)
+    remote_url = remote.stdout.strip() if remote is not None and remote.returncode == 0 else ""
+    return {
+        "name": dir_path.name,
+        "from": head_sha[:7],
+        "to": label,
+        "upstream": remote_url,
+    }
+
+
+def check_plugins(dirs: list[Path]) -> list[dict[str, str]]:
+    if not dirs:
+        return []
+    # Each plugin is an independent network fetch; run them concurrently.
+    with ThreadPoolExecutor(max_workers=len(dirs)) as pool:
+        results = list(pool.map(plugin_update, dirs))
+    return [entry for entry in results if entry is not None]
 
 
 def mise_binary() -> str | None:
@@ -170,9 +424,9 @@ def run_mise_outdated(binary: str, release_age: str | None) -> dict[str, Any] | 
     return data
 
 
-def check_mise(binary: str | None) -> int:
+def check_mise(binary: str | None) -> list[dict[str, str]]:
     if binary is None:
-        return 0
+        return []
     # Mirror what `omarchy update` installs: omarchy-update-mise runs
     # `MISE_MINIMUM_RELEASE_AGE=0 mise up`, so drop mise's release cooldown to
     # count the versions that command would actually pull in. Fall back to the
@@ -180,7 +434,40 @@ def check_mise(binary: str | None) -> int:
     outdated = run_mise_outdated(binary, "0")
     if outdated is None:
         outdated = run_mise_outdated(binary, None)
-    return len(outdated) if outdated is not None else 0
+    if not outdated:
+        return []
+    packages = []
+    for key, info in outdated.items():
+        info = info if isinstance(info, dict) else {}
+        current = str(info.get("current") or "")
+        latest = str(info.get("latest") or info.get("requested") or "")
+        name = str(key).split("@")[0]
+        packages.append({"name": name, "from": current, "to": latest})
+    return packages
+
+
+def mise_tool_urls(binary: str | None) -> dict[str, str]:
+    """Map mise tool name -> GitHub repo URL using a single `mise registry` call.
+
+    Only backends that name a repository directly (aqua:/github:) resolve; core
+    and language-runner backends fall back to the registry page at link time.
+    """
+    if binary is None:
+        return {}
+    urls: dict[str, str] = {}
+    for line in command_lines([binary, "registry"], require_ok=False):
+        parts = line.split()
+        if not parts:
+            continue
+        tool = parts[0]
+        for token in parts[1:]:
+            match = MISE_GITHUB_BACKEND_RE.match(token)
+            # aqua ids are sometimes reverse-DNS (atlassian.com/acli), which is
+            # not a GitHub owner/repo; GitHub names never contain dots.
+            if match and "." not in match.group(1):
+                urls[tool] = f"https://github.com/{match.group(1)}/{match.group(2)}"
+                break
+    return urls
 
 
 def mise_tool_count(binary: str | None) -> int:
@@ -210,16 +497,25 @@ def aur_update_cmd(helper: str | None) -> str:
     return f"{helper} -Sua; echo; read -n 1 -s -r -p 'Done. Press any key to close'"
 
 
-def collect_repo(id: str, name: str, count: int, pkg_count: int, icon: str, update_cmd: str, installed: bool) -> dict[str, Any]:
+def collect_repo(id: str, name: str, packages: list[dict[str, str]], pkg_count: int, icon: str, update_cmd: str, installed: bool) -> dict[str, Any]:
     return {
         "id": id,
         "name": name,
-        "count": count,
+        "count": len(packages),
         "pkgCount": pkg_count,
         "icon": icon,
         "updateCmd": update_cmd,
         "installed": installed,
+        "packages": packages,
     }
+
+
+def mise_fallback_url(name: str) -> str:
+    return MISE_REGISTRY_URL
+
+
+def omarchy_fallback_url(name: str) -> str:
+    return OMARCHY_REPO
 
 
 def main() -> int:
@@ -227,67 +523,97 @@ def main() -> int:
     flatpak_installed = shutil.which("flatpak") is not None
     mise = mise_binary()
 
-    cached_counts = load_pkg_counts()
-    # A cache written before the mise source existed lacks its key; recompute
-    # the whole inventory once rather than reporting 0 mise tools for a day.
-    if cached_counts is not None and "mise" not in cached_counts:
-        cached_counts = None
+    cache = load_cache()
+    # A cache written before the mise source existed lacks its count key;
+    # recompute the whole inventory once rather than reporting 0 mise tools
+    # (or an empty URL map) for a day.
+    if cache is not None and "mise" not in cache["counts"]:
+        cache = None
+
+    # Installed git-managed shell plugins (local listing; cheap every run).
+    plugin_dirs = git_plugin_dirs()
 
     # Repo checks hit the network and are independent; run them concurrently so
     # total scan time is the slowest single check instead of the sum of all.
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         f_pacman = pool.submit(check_pacman)
         f_aur = pool.submit(check_aur, helper)
         f_flatpak = pool.submit(check_flatpak) if flatpak_installed else None
         f_omarchy = pool.submit(check_omarchy)
         f_mise = pool.submit(check_mise, mise) if mise is not None else None
+        f_plugins = pool.submit(check_plugins, plugin_dirs) if plugin_dirs else None
 
-    pacman_count = f_pacman.result()
-    aur_count = f_aur.result()
-    flatpak_count = f_flatpak.result() if f_flatpak else 0
-    omarchy_count = f_omarchy.result()
-    mise_count = f_mise.result() if f_mise else 0
+    pacman_updates = f_pacman.result()
+    aur_updates = f_aur.result()
+    flatpak_updates = f_flatpak.result() if f_flatpak else []
+    omarchy_updates = f_omarchy.result()
+    mise_updates = f_mise.result() if f_mise else []
+    plugin_updates = f_plugins.result() if f_plugins else []
 
-    if cached_counts is not None:
-        pacman_pkgs = cached_counts.get("pacman", 0)
-        aur_pkgs = cached_counts.get("aur", 0) if helper is not None else 0
-        flatpak_pkgs = cached_counts.get("flatpak", 0) if flatpak_installed else 0
-        omarchy_pkgs = cached_counts.get("omarchy", 0)
-        mise_pkgs = cached_counts.get("mise", 0) if mise is not None else 0
+    if cache is not None:
+        counts = cache["counts"]
+        upstream_urls = cache["urls"]
+        pacman_pkgs = counts.get("pacman", 0)
+        aur_pkgs = counts.get("aur", 0) if helper is not None else 0
+        flatpak_pkgs = counts.get("flatpak", 0) if flatpak_installed else 0
+        omarchy_pkgs = counts.get("omarchy", 0)
+        mise_pkgs = counts.get("mise", 0) if mise is not None else 0
     else:
         installed = installed_pkg_names()
+        upstream_urls = installed_upstream_urls()
         pacman_pkgs = len(installed)
         aur_pkgs = aur_pkg_count() if helper is not None else 0
         flatpak_pkgs = flatpak_pkg_count() if flatpak_installed else 0
         omarchy_pkgs = omarchy_pkg_count(installed)
         mise_pkgs = mise_tool_count(mise) if mise is not None else 0
-        save_pkg_counts({
-            "pacman": pacman_pkgs,
-            "aur": aur_pkgs,
-            "flatpak": flatpak_pkgs,
-            "omarchy": omarchy_pkgs,
-            "mise": mise_pkgs,
-        })
+        save_cache(
+            {
+                "pacman": pacman_pkgs,
+                "aur": aur_pkgs,
+                "flatpak": flatpak_pkgs,
+                "omarchy": omarchy_pkgs,
+                "mise": mise_pkgs,
+            },
+            upstream_urls,
+        )
+
+    mise_urls = mise_tool_urls(mise) if mise is not None else {}
 
     repos = [
-        collect_repo("pacman", "Arch", pacman_count, pacman_pkgs, "arch-logo.svg",
+        collect_repo("pacman", "Arch",
+            with_links(pacman_updates, upstream_urls, arch_fallback_url),
+            pacman_pkgs, "arch-logo.svg",
             "sudo env OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             True),
-        collect_repo("aur", "AUR", aur_count, aur_pkgs, "arch-logo.svg",
+        collect_repo("aur", "AUR",
+            with_links(aur_updates, upstream_urls, aur_fallback_url),
+            aur_pkgs, "arch-logo.svg",
             aur_update_cmd(helper),
             helper is not None),
-        collect_repo("flatpak", "Flatpak", flatpak_count, flatpak_pkgs, "flatpak.svg",
+        collect_repo("flatpak", "Flatpak",
+            with_links(flatpak_updates, {}, flatpak_fallback_url),
+            flatpak_pkgs, "flatpak.svg",
             "flatpak update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             flatpak_installed),
-        collect_repo("omarchy", "Omarchy", omarchy_count, omarchy_pkgs, "omarchy.svg",
+        collect_repo("omarchy", "Omarchy",
+            with_links(omarchy_updates, upstream_urls, omarchy_fallback_url),
+            omarchy_pkgs, "omarchy.svg",
             "omarchy update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             True),
-        collect_repo("mise", "mise", mise_count, mise_pkgs, "mise.svg",
+        collect_repo("plugins", "Plugins",
+            with_links(plugin_updates, {}, lambda name: ""),
+            len(plugin_dirs), "plugins.svg",
+            "omarchy plugin update --yes; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
+            bool(plugin_dirs)),
+        collect_repo("mise", "mise",
+            with_links(mise_updates, mise_urls, mise_fallback_url),
+            mise_pkgs, "mise.svg",
             "MISE_MINIMUM_RELEASE_AGE=0 mise up; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             mise is not None),
     ]
 
-    total = pacman_count + aur_count + flatpak_count + omarchy_count + mise_count
+    total = (len(pacman_updates) + len(aur_updates) + len(flatpak_updates)
+             + len(omarchy_updates) + len(plugin_updates) + len(mise_updates))
 
     result = {
         "repos": repos,
