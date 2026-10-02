@@ -424,9 +424,9 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(plugins["pkgCount"], 2)
         self.assertIn("omarchy plugin update", plugins["updateCmd"])
         package = plugins["packages"][0]
-        # The plugin's own SSH remote becomes an https release-notes link.
-        self.assertEqual(package["url"], "https://github.com/owner/one/releases")
-        self.assertEqual(package["label"], "Release notes")
+        # Plugin history follows the default branch, matching the origin HEAD fetch.
+        self.assertEqual(package["url"], "https://github.com/owner/one/commits/")
+        self.assertEqual(package["label"], "Commit history")
 
     def test_emits_packages_with_links(self):
         result = self._run()
