@@ -192,20 +192,16 @@ def resolve_link(
     return {"url": fallback_url, "label": fallback_label}
 
 
-def resolve_plugin_link(remote: str, head: str, upstream: str) -> dict[str, str]:
-    """Link to the fetched commit range, rather than a plugin's releases."""
+def resolve_plugin_link(remote: str) -> dict[str, str]:
+    """Link to the default branch's commit history for GitHub plugins."""
     url = normalize_remote(remote).rstrip("/")
-    for pattern, host in ((GITHUB_RE, "github.com"), (CODEBERG_RE, "codeberg.org")):
-        match = pattern.match(url)
-        if match:
-            repo = re.sub(r"\.git$", "", match.group(2))
-            return {
-                "url": f"https://{host}/{match.group(1)}/{repo}/compare/{head}...{upstream}",
-                "label": "View changes",
-            }
-    if GITLAB_HOST_RE.match(url):
-        base = re.sub(r"\.git$", "", url)
-        return {"url": f"{base}/-/compare/{head}...{upstream}", "label": "View changes"}
+    match = GITHUB_RE.match(url)
+    if match:
+        repo = re.sub(r"\.git$", "", match.group(2))
+        return {
+            "url": f"https://github.com/{match.group(1)}/{repo}/commits/",
+            "label": "Commit history",
+        }
     return {"url": url, "label": "Repo"}
 
 
@@ -387,7 +383,7 @@ def plugin_update(dir_path: Path) -> dict[str, str] | None:
         "name": dir_path.name,
         "from": head_sha[:7],
         "to": label,
-        **resolve_plugin_link(remote_url, head_sha, upstream_sha),
+        **resolve_plugin_link(remote_url),
     }
 
 

@@ -304,27 +304,24 @@ class NormalizeRemoteTests(unittest.TestCase):
 
 
 class PluginLinkTests(unittest.TestCase):
-    def test_compare_links_use_full_commit_ids(self):
-        head, upstream = "a" * 40, "b" * 40
-        for remote, base in (
-            ("https://github.com/owner/repo.git", "https://github.com/owner/repo/compare/"),
-            ("git@github.com:owner/repo.git", "https://github.com/owner/repo/compare/"),
-            ("ssh://git@gitlab.com/group/subgroup/repo.git", "https://gitlab.com/group/subgroup/repo/-/compare/"),
-            ("https://gitlab.gnome.org/GNOME/repo.git/", "https://gitlab.gnome.org/GNOME/repo/-/compare/"),
-            ("git@codeberg.org:owner/repo.git", "https://codeberg.org/owner/repo/compare/"),
+    def test_github_links_to_default_branch_history(self):
+        for remote in (
+            "https://github.com/owner/repo.git",
+            "git@github.com:owner/repo.git",
+            "ssh://git@github.com/owner/repo.git",
         ):
             with self.subTest(remote=remote):
-                self.assertEqual(check_updates.resolve_plugin_link(remote, head, upstream), {
-                    "url": f"{base}{head}...{upstream}", "label": "View changes",
+                self.assertEqual(check_updates.resolve_plugin_link(remote), {
+                    "url": "https://github.com/owner/repo/commits/", "label": "Commit history",
                 })
 
     def test_unknown_host_links_to_repo(self):
-        self.assertEqual(check_updates.resolve_plugin_link("git@example.org:owner/repo.git", "aaa", "bbb"), {
+        self.assertEqual(check_updates.resolve_plugin_link("git@example.org:owner/repo.git"), {
             "url": "https://example.org/owner/repo", "label": "Repo",
         })
 
     def test_missing_remote_has_no_link(self):
-        self.assertEqual(check_updates.resolve_plugin_link("", "aaa", "bbb")["url"], "")
+        self.assertEqual(check_updates.resolve_plugin_link("")["url"], "")
 
 
 class PluginUpdateTests(unittest.TestCase):
@@ -353,8 +350,8 @@ class PluginUpdateTests(unittest.TestCase):
         self.assertEqual(entry["name"], "cool-plugin")
         self.assertEqual(entry["from"], "aaaaaaa")
         self.assertEqual(entry["to"], "3 new commits")
-        self.assertEqual(entry["url"], "https://github.com/owner/repo/compare/aaaaaaa1111...bbbbbbb2222")
-        self.assertEqual(entry["label"], "View changes")
+        self.assertEqual(entry["url"], "https://github.com/owner/repo/commits/")
+        self.assertEqual(entry["label"], "Commit history")
 
     def test_single_commit_label_is_singular(self):
         self.responses["rev-parse HEAD"] = completed(stdout="aaaaaaa1111")
@@ -405,8 +402,8 @@ class MainIntegrationTests(unittest.TestCase):
             "git_plugin_dirs": lambda: [Path("/plugins/one"), Path("/plugins/two")],
             "check_plugins": lambda dirs: [
                 {"name": "one", "from": "abc1234", "to": "2 new commits",
-                 "url": "https://github.com/owner/one/compare/abc1234...def5678",
-                 "label": "View changes"}
+                 "url": "https://github.com/owner/one/commits/",
+                 "label": "Commit history"}
             ],
             "load_cache": lambda: None,
             "save_cache": lambda counts, urls: self.saved.update(counts),
@@ -450,9 +447,9 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(plugins["pkgCount"], 2)
         self.assertIn("omarchy plugin update", plugins["updateCmd"])
         package = plugins["packages"][0]
-        # Preserve the commit comparison supplied by the plugin scanner.
-        self.assertEqual(package["url"], "https://github.com/owner/one/compare/abc1234...def5678")
-        self.assertEqual(package["label"], "View changes")
+        # Preserve the commit-history link supplied by the plugin scanner.
+        self.assertEqual(package["url"], "https://github.com/owner/one/commits/")
+        self.assertEqual(package["label"], "Commit history")
 
     def test_emits_packages_with_links(self):
         result = self._run()
