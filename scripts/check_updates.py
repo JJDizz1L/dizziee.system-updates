@@ -161,7 +161,7 @@ def normalize_remote(url: str | None) -> str:
 
 
 def resolve_link(
-    upstream: str | None, fallback_url: str = "", fallback_label: str = "Repo"
+    upstream: str | None, fallback_url: str = "", fallback_label: str = "Repo", *, commit_history: bool = False
 ) -> dict[str, str]:
     """Pick a package link: release notes on known code hosts, else the repo.
 
@@ -175,8 +175,8 @@ def resolve_link(
         if match:
             repo = re.sub(r"\.git$", "", match.group(2))
             return {
-                "url": f"https://github.com/{match.group(1)}/{repo}/releases",
-                "label": "Release notes",
+                "url": f"https://github.com/{match.group(1)}/{repo}/" + ("commits/" if commit_history else "releases"),
+                "label": "Commit history" if commit_history else "Release notes",
             }
         if GITLAB_HOST_RE.match(url):
             base = url.split("/-/")[0].split("/tree/")[0].rstrip("/")
@@ -192,30 +192,18 @@ def resolve_link(
     return {"url": fallback_url, "label": fallback_label}
 
 
-def resolve_plugin_link(remote: str) -> dict[str, str]:
-    """Link to the default branch's commit history for GitHub plugins."""
-    url = normalize_remote(remote).rstrip("/")
-    match = GITHUB_RE.match(url)
-    if match:
-        repo = re.sub(r"\.git$", "", match.group(2))
-        return {
-            "url": f"https://github.com/{match.group(1)}/{repo}/commits/",
-            "label": "Commit history",
-        }
-    return {"url": url, "label": "Repo"}
-
-
 def with_links(
     packages: list[dict[str, str]],
     upstream_urls: dict[str, str],
     fallback: Callable[[str], str],
+    *, commit_history: bool = False,
 ) -> list[dict[str, str]]:
     linked = []
     for package in packages:
-        # A package may carry its own `upstream`;
+        # A package may carry its own `upstream` (e.g. a plugin's git remote);
         # otherwise fall back to the shared name -> URL map.
         upstream = package.get("upstream") or upstream_urls.get(package["name"])
-        link = resolve_link(upstream, fallback(package["name"]))
+        link = resolve_link(upstream, fallback(package["name"]), commit_history=commit_history)
         entry = {k: v for k, v in package.items() if k != "upstream"}
         entry["url"] = link["url"]
         entry["label"] = link["label"]
@@ -383,7 +371,7 @@ def plugin_update(dir_path: Path) -> dict[str, str] | None:
         "name": dir_path.name,
         "from": head_sha[:7],
         "to": label,
-        **resolve_plugin_link(remote_url),
+        "upstream": remote_url,
     }
 
 
@@ -614,7 +602,7 @@ def main() -> int:
             "omarchy update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             True),
         collect_repo("plugins", "Plugins",
-            plugin_updates,
+            with_links(plugin_updates, {}, lambda name: "", commit_history=True),
             len(plugin_dirs), "plugins.svg",
             "omarchy plugin update --yes; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             bool(plugin_dirs)),
