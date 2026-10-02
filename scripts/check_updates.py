@@ -192,6 +192,23 @@ def resolve_link(
     return {"url": fallback_url, "label": fallback_label}
 
 
+def resolve_plugin_link(remote: str, head: str, upstream: str) -> dict[str, str]:
+    """Link to the fetched commit range, rather than a plugin's releases."""
+    url = normalize_remote(remote).rstrip("/")
+    for pattern, host in ((GITHUB_RE, "github.com"), (CODEBERG_RE, "codeberg.org")):
+        match = pattern.match(url)
+        if match:
+            repo = re.sub(r"\.git$", "", match.group(2))
+            return {
+                "url": f"https://{host}/{match.group(1)}/{repo}/compare/{head}...{upstream}",
+                "label": "View changes",
+            }
+    if GITLAB_HOST_RE.match(url):
+        base = re.sub(r"\.git$", "", url)
+        return {"url": f"{base}/-/compare/{head}...{upstream}", "label": "View changes"}
+    return {"url": url, "label": "Repo"}
+
+
 def with_links(
     packages: list[dict[str, str]],
     upstream_urls: dict[str, str],
@@ -199,7 +216,7 @@ def with_links(
 ) -> list[dict[str, str]]:
     linked = []
     for package in packages:
-        # A package may carry its own `upstream` (e.g. a plugin's git remote);
+        # A package may carry its own `upstream`;
         # otherwise fall back to the shared name -> URL map.
         upstream = package.get("upstream") or upstream_urls.get(package["name"])
         link = resolve_link(upstream, fallback(package["name"]))
@@ -370,7 +387,7 @@ def plugin_update(dir_path: Path) -> dict[str, str] | None:
         "name": dir_path.name,
         "from": head_sha[:7],
         "to": label,
-        "upstream": remote_url,
+        **resolve_plugin_link(remote_url, head_sha, upstream_sha),
     }
 
 
@@ -601,7 +618,7 @@ def main() -> int:
             "omarchy update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             True),
         collect_repo("plugins", "Plugins",
-            with_links(plugin_updates, {}, lambda name: ""),
+            plugin_updates,
             len(plugin_dirs), "plugins.svg",
             "omarchy plugin update --yes; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
             bool(plugin_dirs)),
