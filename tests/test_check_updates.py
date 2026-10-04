@@ -342,6 +342,19 @@ class PluginUpdateTests(unittest.TestCase):
         self.responses["rev-parse FETCH_HEAD"] = completed(stdout="same")
         self.assertIsNone(check_updates.plugin_update(Path("/plugins/p")))
 
+    def test_ahead_of_origin_is_none(self):
+        # Local commits or a feature branch: HEAD differs from FETCH_HEAD but
+        # has every upstream commit, so there is nothing to pull.
+        self.responses["rev-parse HEAD"] = completed(stdout="aaaaaaa1111")
+        self.responses["rev-parse FETCH_HEAD"] = completed(stdout="bbbbbbb2222")
+        self.responses["rev-list --count HEAD..FETCH_HEAD"] = completed(stdout="0")
+        self.assertIsNone(check_updates.plugin_update(Path("/plugins/p")))
+
+    def test_unknown_behind_count_is_none(self):
+        self.responses["rev-parse HEAD"] = completed(stdout="aaaaaaa1111")
+        self.responses["rev-parse FETCH_HEAD"] = completed(stdout="bbbbbbb2222")
+        self.assertIsNone(check_updates.plugin_update(Path("/plugins/p")))
+
     def test_fetch_failure_is_none(self):
         self.responses["fetch --quiet origin HEAD"] = completed(returncode=1)
         self.assertIsNone(check_updates.plugin_update(Path("/plugins/p")))
