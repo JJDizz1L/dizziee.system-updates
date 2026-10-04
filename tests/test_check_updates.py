@@ -199,24 +199,141 @@ class ParseVersionLinesTests(unittest.TestCase):
         )
 
 
-class CheckPackageListTests(unittest.TestCase):
+class CheckPacmanTests(unittest.TestCase):
     def setUp(self):
-        self._real_cmd = check_updates.command_lines
+        self.calls = []
+        self.responses = []
+        self.sleeps = []
+        self._real_run = check_updates.subprocess.run
         self._real_which = check_updates.shutil.which
-        check_updates.command_lines = lambda *a, **k: ["foo 1.0 -> 2.0", "bar 3.0 -> 4.0"]
-        self.addCleanup(lambda: setattr(check_updates, "command_lines", self._real_cmd))
+        self._real_sleep = check_updates.time.sleep
+
+        def fake_run(command, **kwargs):
+            self.calls.append(command)
+            return self.responses.pop(0)
+
+        check_updates.subprocess.run = fake_run
+        check_updates.shutil.which = lambda name: "/usr/bin/" + name
+        check_updates.time.sleep = self.sleeps.append
+        self.addCleanup(lambda: setattr(check_updates.subprocess, "run", self._real_run))
         self.addCleanup(lambda: setattr(check_updates.shutil, "which", self._real_which))
+        self.addCleanup(lambda: setattr(check_updates.time, "sleep", self._real_sleep))
 
     def test_pacman_returns_packages(self):
-        check_updates.shutil.which = lambda name: "/usr/bin/" + name
+        self.responses.append(completed(stdout="foo 1.0 -> 2.0\nbar 3.0 -> 4.0\n"))
         self.assertEqual(
             check_updates.check_pacman(),
             [pkg("foo", "1.0", "2.0"), pkg("bar", "3.0", "4.0")],
         )
+        self.assertEqual(len(self.calls), 1)
+
+    def test_up_to_date_exit_2_is_not_retried(self):
+        self.responses.append(completed(returncode=2))
+        self.assertEqual(check_updates.check_pacman(), [])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_retries_once_when_database_is_busy(self):
+        # Another checkupdates holding the shared temp database makes this one
+        # exit 1 with "Cannot fetch updates".
+        self.responses.append(completed(stderr="==> ERROR: Cannot fetch updates", returncode=1))
+        self.responses.append(completed(stdout="foo 1.0 -> 2.0\n"))
+        self.assertEqual(check_updates.check_pacman(), [pkg("foo", "1.0", "2.0")])
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.sleeps, [check_updates.CHECKUPDATES_RETRY_DELAY_S])
+
+    def test_gives_up_after_one_retry(self):
+        self.responses.append(completed(returncode=1))
+        self.responses.append(completed(returncode=1))
+        self.assertEqual(check_updates.check_pacman(), [])
+        self.assertEqual(len(self.calls), 2)
 
     def test_missing_checkupdates_is_empty(self):
         check_updates.shutil.which = lambda name: None
         self.assertEqual(check_updates.check_pacman(), [])
+        self.assertEqual(self.calls, [])
+
+
+class CheckOmarchyTests(unittest.TestCase):
+    def test_takes_omarchy_package_from_arch_scan(self):
+        pacman = [pkg("linux", "1", "2"), pkg("omarchy", "4.0.4-1", "4.0.5-1")]
+        self.assertEqual(
+            check_updates.check_omarchy(pacman, None), [pkg("omarchy", "4.0.4-1", "4.0.5-1")]
+        )
+
+    def test_takes_omarchy_dev_package(self):
+        pacman = [pkg("omarchy-dev", "1", "2")]
+        self.assertEqual(check_updates.check_omarchy(pacman, None), [pkg("omarchy-dev", "1", "2")])
+
+    def test_empty_without_omarchy_updates(self):
+        self.assertEqual(check_updates.check_omarchy([pkg("linux", "1", "2")], None), [])
+
+    def test_checkout_update_comes_first(self):
+        checkout = pkg("omarchy-dev-checkout", "", "3 new commits on origin/dev")
+        result = check_updates.check_omarchy([pkg("omarchy-dev", "1", "2")], checkout)
+        self.assertEqual([p["name"] for p in result], ["omarchy-dev-checkout", "omarchy-dev"])
+
+    def test_does_not_alias_arch_entries(self):
+        pacman = [pkg("omarchy", "1", "2")]
+        check_updates.check_omarchy(pacman, None)[0]["url"] = "x"
+        self.assertNotIn("url", pacman[0])
+
+
+class OmarchyCheckoutUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.git_calls = []
+        self.git_responses = {}
+        self._real_git = check_updates._run_git
+        self._real_path = check_updates.os.environ.get("OMARCHY_PATH")
+
+        def fake_git(args, cwd, timeout=None):
+            self.git_calls.append(args)
+            return self.git_responses.get(args[0], completed())
+
+        check_updates._run_git = fake_git
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        check_updates._run_git = self._real_git
+        if self._real_path is None:
+            check_updates.os.environ.pop("OMARCHY_PATH", None)
+        else:
+            check_updates.os.environ["OMARCHY_PATH"] = self._real_path
+
+    def test_packaged_install_is_none(self):
+        check_updates.os.environ["OMARCHY_PATH"] = "/usr/share/omarchy"
+        self.assertIsNone(check_updates.omarchy_checkout_update())
+        self.assertEqual(self.git_calls, [])
+
+    def test_unset_path_is_none(self):
+        check_updates.os.environ.pop("OMARCHY_PATH", None)
+        self.assertIsNone(check_updates.omarchy_checkout_update())
+
+    def test_checkout_behind_upstream(self):
+        check_updates.os.environ["OMARCHY_PATH"] = "/home/me/omarchy"
+        self.git_responses["rev-parse"] = completed(stdout="origin/dev\n")
+        self.git_responses["rev-list"] = completed(stdout="3\n")
+        self.assertEqual(
+            check_updates.omarchy_checkout_update(),
+            pkg("omarchy-dev-checkout", "", "3 new commits on origin/dev"),
+        )
+        self.assertIn(["rev-list", "--count", "HEAD..origin/dev"], self.git_calls)
+
+    def test_single_commit_is_singular(self):
+        check_updates.os.environ["OMARCHY_PATH"] = "/home/me/omarchy"
+        self.git_responses["rev-parse"] = completed(stdout="origin/dev\n")
+        self.git_responses["rev-list"] = completed(stdout="1\n")
+        self.assertEqual(check_updates.omarchy_checkout_update()["to"], "1 new commit on origin/dev")
+
+    def test_current_checkout_is_none(self):
+        check_updates.os.environ["OMARCHY_PATH"] = "/home/me/omarchy"
+        self.git_responses["rev-parse"] = completed(stdout="origin/dev\n")
+        self.git_responses["rev-list"] = completed(stdout="0\n")
+        self.assertIsNone(check_updates.omarchy_checkout_update())
+
+    def test_no_upstream_is_none(self):
+        check_updates.os.environ["OMARCHY_PATH"] = "/home/me/omarchy"
+        self.git_responses["rev-parse"] = completed(returncode=128)
+        self.assertIsNone(check_updates.omarchy_checkout_update())
 
 
 class ResolveLinkTests(unittest.TestCase):
@@ -369,7 +486,7 @@ class MainIntegrationTests(unittest.TestCase):
         for name, value in {
             "aur_helper": lambda: None,
             "check_pacman": lambda: [pkg("linux", "1", "2"), pkg("mesa", "1", "2"), pkg("glibc", "1", "2")],
-            "check_omarchy": lambda: [],
+            "omarchy_checkout_update": lambda: None,
             "check_mise": lambda binary: [pkg("claude", "1", "2"), pkg("codex", "1", "2")],
             "mise_binary": lambda: "/usr/bin/mise",
             "mise_tool_count": lambda binary: 8,
@@ -449,6 +566,25 @@ class MainIntegrationTests(unittest.TestCase):
         mise = [r for r in result["repos"] if r["id"] == "mise"][0]
         self.assertFalse(mise["installed"])
         self.assertEqual(result["total"], 4)
+
+    def test_omarchy_package_counts_once_in_total(self):
+        check_updates.check_pacman = lambda: [pkg("linux", "1", "2"), pkg("omarchy", "4.0.4-1", "4.0.5-1")]
+        result = self._run()
+        omarchy = [r for r in result["repos"] if r["id"] == "omarchy"][0]
+        pacman = [r for r in result["repos"] if r["id"] == "pacman"][0]
+        # Both rows list it (the Arch upgrade installs it too), the total counts it once.
+        self.assertEqual([p["name"] for p in omarchy["packages"]], ["omarchy"])
+        self.assertEqual(pacman["count"], 2)
+        self.assertEqual(result["total"], 2 + 2 + 1)  # pacman + mise + plugin
+
+    def test_omarchy_checkout_update_counts_in_total(self):
+        check_updates.omarchy_checkout_update = lambda: pkg(
+            "omarchy-dev-checkout", "", "2 new commits on origin/dev"
+        )
+        result = self._run()
+        omarchy = [r for r in result["repos"] if r["id"] == "omarchy"][0]
+        self.assertEqual(omarchy["count"], 1)
+        self.assertEqual(result["total"], 7)
 
     def test_plugins_row_hidden_when_none_installed(self):
         check_updates.git_plugin_dirs = lambda: []
