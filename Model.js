@@ -17,9 +17,16 @@ function autoRefreshEnabled(value) {
   return value !== false
 }
 
+// Upstream links come from package metadata, which is not ours to trust, so
+// only plain web addresses are ever handed to the browser.
+function isWebUrl(url) {
+  return /^https?:\/\/\S/i.test(String(url || ""))
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     parseRepoList: parseRepoList,
-    autoRefreshEnabled: autoRefreshEnabled
+    autoRefreshEnabled: autoRefreshEnabled,
+    isWebUrl: isWebUrl
   }
 }

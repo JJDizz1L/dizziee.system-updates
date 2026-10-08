@@ -69,7 +69,7 @@ Panel {
   }
 
   function openUrl(url) {
-    if (url) Qt.openUrlExternally(url)
+    if (Model.isWebUrl(url)) Qt.openUrlExternally(url)
   }
 
   function refresh() {
