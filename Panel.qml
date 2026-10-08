@@ -242,6 +242,7 @@ Panel {
     var refresh = Number(next.refreshIntervalSec === undefined || next.refreshIntervalSec === null ? 1800 : next.refreshIntervalSec)
     next.refreshIntervalSec = Math.round(root.clamp(isFinite(refresh) ? refresh : 1800, 300, 7200))
     next.alwaysShow = next.alwaysShow !== false
+    next.autoRefresh = Model.autoRefreshEnabled(next.autoRefresh)
     return next
   }
 
@@ -358,7 +359,7 @@ Panel {
 
   Timer {
     interval: Math.max(300, Number(root.setting("refreshIntervalSec", 1800))) * 1000
-    running: true
+    running: Model.autoRefreshEnabled(root.setting("autoRefresh", true))
     repeat: true
     onTriggered: root.refresh()
   }
@@ -369,7 +370,7 @@ Panel {
   Timer {
     id: bootTimer
     interval: 90000
-    running: true
+    running: Model.autoRefreshEnabled(root.setting("autoRefresh", true))
     repeat: false
     onTriggered: root.refresh()
   }
@@ -793,6 +794,17 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
+              }
+
+              Toggle {
+                Layout.fillWidth: true
+                label: "Automatic checks"
+                description: checked ? "Checks run on the interval and once after startup" : "Checks run only when you open the panel or refresh"
+                checked: root.draftValue("autoRefresh", true) === true
+                foreground: root.fg
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onClicked: root.setDraftValue("autoRefresh", !checked)
               }
             }
           }

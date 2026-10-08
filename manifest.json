@@ -17,7 +17,8 @@
     "allowMultiple": false,
     "defaults": {
       "refreshIntervalSec": 1800,
-      "alwaysShow": true
+      "alwaysShow": true,
+      "autoRefresh": true
     },
     "schema": [
       {
@@ -34,6 +35,13 @@
         "type": "boolean",
         "label": "Always Show",
         "description": "Keep the icon visible even when no updates are available.",
+        "defaultValue": true
+      },
+      {
+        "key": "autoRefresh",
+        "type": "boolean",
+        "label": "Automatic checks",
+        "description": "Check on the interval and once after startup. Off means checks run only when the panel is opened.",
         "defaultValue": true
       }
     ]

@@ -11,8 +11,15 @@ function parseRepoList(raw) {
   }
 }
 
+// Automatic background scans are on unless explicitly turned off. Off means
+// the scanner runs only when the panel is opened or refreshed by hand.
+function autoRefreshEnabled(value) {
+  return value !== false
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
-    parseRepoList: parseRepoList
+    parseRepoList: parseRepoList,
+    autoRefreshEnabled: autoRefreshEnabled
   }
 }
