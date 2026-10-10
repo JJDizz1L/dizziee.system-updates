@@ -273,15 +273,25 @@ def run_checkupdates() -> subprocess.CompletedProcess | None:
         return None
 
 
+def checkupdates_busy(result: subprocess.CompletedProcess) -> bool:
+    """Whether checkupdates failed because its temp database was locked.
+
+    checkupdates exits 1 for any sync failure, but only the locked-database
+    case ("Cannot fetch updates") is worth a retry; other exit-1 errors such
+    as a missing fakeroot binary will fail the same way 2 s later.
+    """
+    return "cannot fetch updates" in (result.stderr or "").lower()
+
+
 def check_pacman() -> list[dict[str, str]]:
     if shutil.which("checkupdates") is None:
         return []
     # checkupdates syncs into one temp database per user, so a run elsewhere at
     # the same moment (Omarchy's own update widget, this widget on another
-    # monitor) makes it exit 1 with "Cannot fetch updates". Retry once before
-    # reporting nothing.
+    # monitor) makes it exit 1 with "Cannot fetch updates". Retry once in that
+    # case before reporting nothing.
     result = run_checkupdates()
-    if result is not None and result.returncode == 1:
+    if result is not None and result.returncode == 1 and checkupdates_busy(result):
         time.sleep(CHECKUPDATES_RETRY_DELAY_S)
         result = run_checkupdates()
     if result is None:

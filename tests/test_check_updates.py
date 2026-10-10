@@ -242,10 +242,19 @@ class CheckPacmanTests(unittest.TestCase):
         self.assertEqual(self.sleeps, [check_updates.CHECKUPDATES_RETRY_DELAY_S])
 
     def test_gives_up_after_one_retry(self):
-        self.responses.append(completed(returncode=1))
-        self.responses.append(completed(returncode=1))
+        self.responses.append(completed(stderr="==> ERROR: Cannot fetch updates", returncode=1))
+        self.responses.append(completed(stderr="==> ERROR: Cannot fetch updates", returncode=1))
         self.assertEqual(check_updates.check_pacman(), [])
         self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.sleeps, [check_updates.CHECKUPDATES_RETRY_DELAY_S])
+
+    def test_other_exit_1_errors_are_not_retried(self):
+        # A missing fakeroot binary also exits 1, but retrying 2 s later
+        # fails the same way, so report nothing without the delay.
+        self.responses.append(completed(stderr="==> ERROR: Cannot find the fakeroot binary", returncode=1))
+        self.assertEqual(check_updates.check_pacman(), [])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.sleeps, [])
 
     def test_missing_checkupdates_is_empty(self):
         check_updates.shutil.which = lambda name: None
