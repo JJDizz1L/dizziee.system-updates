@@ -21,6 +21,11 @@ PKG_COUNTS_TTL_S = 24 * 3600
 # The Omarchy row has no per-package metadata of its own; both the packaged
 # build and a dev checkout upstream to the same repository.
 OMARCHY_REPO = "https://github.com/basecamp/omarchy"
+# Packages that carry the Omarchy release itself, and where the packaged
+# build lives (any other OMARCHY_PATH is a dev checkout).
+OMARCHY_PACKAGES = ("omarchy", "omarchy-dev")
+OMARCHY_SYSTEM_PATH = "/usr/share/omarchy"
+CHECKUPDATES_RETRY_DELAY_S = 2
 MISE_REGISTRY_URL = "https://mise.jdx.dev/registry.html"
 
 # `checkupdates`, `pacman -Qu`, and `yay/paru -Qua` all print
@@ -261,11 +266,28 @@ def omarchy_pkg_count(installed: set[str]) -> int:
         return 0
 
 
+def run_checkupdates() -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(["checkupdates"], capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+
+
 def check_pacman() -> list[dict[str, str]]:
     if shutil.which("checkupdates") is None:
         return []
+    # checkupdates syncs into one temp database per user, so a run elsewhere at
+    # the same moment (Omarchy's own update widget, this widget on another
+    # monitor) makes it exit 1 with "Cannot fetch updates". Retry once before
+    # reporting nothing.
+    result = run_checkupdates()
+    if result is not None and result.returncode == 1:
+        time.sleep(CHECKUPDATES_RETRY_DELAY_S)
+        result = run_checkupdates()
+    if result is None:
+        return []
     # checkupdates exits 2 (with no output) when everything is current.
-    return parse_version_lines(command_lines(["checkupdates"], require_ok=False))
+    return parse_version_lines([line for line in result.stdout.splitlines() if line.strip()])
 
 
 def check_aur(helper: str | None) -> list[dict[str, str]]:
@@ -292,31 +314,41 @@ def check_flatpak() -> list[dict[str, str]]:
     return packages
 
 
-def check_omarchy() -> list[dict[str, str]]:
-    if shutil.which("omarchy-update-available") is None:
-        return []
-    try:
-        result = subprocess.run(
-            ["omarchy-update-available"], capture_output=True, text=True, timeout=30
-        )
-    except Exception:
-        return []
-    if result.returncode != 0:
-        return []
-    packages = []
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        match = VERSION_LINE_RE.match(line)
-        if match:
-            packages.append(
-                {"name": match.group(1), "from": match.group(2), "to": match.group(3)}
-            )
-        else:
-            parts = line.split()
-            packages.append({"name": parts[0], "from": "", "to": " ".join(parts[1:])})
+def check_omarchy(
+    pacman_updates: list[dict[str, str]], checkout_update: dict[str, str] | None
+) -> list[dict[str, str]]:
+    """Omarchy updates, mirroring `omarchy-update-available` without running it.
+
+    The script reports a dev checkout behind its upstream, then the pending
+    omarchy/omarchy-dev package line from `checkupdates`. That package line is
+    taken from the Arch scan instead: calling the script would start a second
+    checkupdates that races the first for its temp database.
+    """
+    packages = [dict(p) for p in pacman_updates if p["name"] in OMARCHY_PACKAGES]
+    if checkout_update is not None:
+        packages.insert(0, checkout_update)
     return packages
+
+
+def omarchy_checkout_update() -> dict[str, str] | None:
+    """A dev checkout of Omarchy (OMARCHY_PATH) behind its upstream, else None."""
+    path = os.environ.get("OMARCHY_PATH", "").rstrip("/")
+    if not path or path == OMARCHY_SYSTEM_PATH:
+        return None
+    checkout = Path(path)
+    upstream = _run_git(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], checkout
+    )
+    if upstream is None or upstream.returncode != 0 or not upstream.stdout.strip():
+        return None
+    ref = upstream.stdout.strip()
+    _run_git(["fetch", "--quiet"], checkout, timeout=10)
+    behind = _run_git(["rev-list", "--count", f"HEAD..{ref}"], checkout)
+    count = behind.stdout.strip() if behind is not None and behind.returncode == 0 else ""
+    if not count.isdigit() or int(count) == 0:
+        return None
+    noun = "commit" if count == "1" else "commits"
+    return {"name": "omarchy-dev-checkout", "from": "", "to": f"{count} new {noun} on {ref}"}
 
 
 def git_plugin_dirs() -> list[Path]:
@@ -540,14 +572,14 @@ def main() -> int:
         f_pacman = pool.submit(check_pacman)
         f_aur = pool.submit(check_aur, helper)
         f_flatpak = pool.submit(check_flatpak) if flatpak_installed else None
-        f_omarchy = pool.submit(check_omarchy)
+        f_checkout = pool.submit(omarchy_checkout_update)
         f_mise = pool.submit(check_mise, mise) if mise is not None else None
         f_plugins = pool.submit(check_plugins, plugin_dirs) if plugin_dirs else None
 
     pacman_updates = f_pacman.result()
     aur_updates = f_aur.result()
     flatpak_updates = f_flatpak.result() if f_flatpak else []
-    omarchy_updates = f_omarchy.result()
+    omarchy_updates = check_omarchy(pacman_updates, f_checkout.result())
     mise_updates = f_mise.result() if f_mise else []
     plugin_updates = f_plugins.result() if f_plugins else []
 
@@ -613,8 +645,12 @@ def main() -> int:
             mise is not None),
     ]
 
+    # The Omarchy row repeats the omarchy package from the Arch row (the Arch
+    # upgrade installs it too); count that update once.
+    pacman_names = {p["name"] for p in pacman_updates}
+    omarchy_only = [p for p in omarchy_updates if p["name"] not in pacman_names]
     total = (len(pacman_updates) + len(aur_updates) + len(flatpak_updates)
-             + len(omarchy_updates) + len(plugin_updates) + len(mise_updates))
+             + len(omarchy_only) + len(plugin_updates) + len(mise_updates))
 
     result = {
         "repos": repos,
