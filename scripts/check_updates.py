@@ -380,8 +380,10 @@ def _run_git(args: list[str], cwd: Path, timeout: int = GIT_FETCH_TIMEOUT_S):
 def plugin_update(dir_path: Path) -> dict[str, str] | None:
     """Return a package entry for a plugin behind origin, else None.
 
-    Mirrors `omarchy-plugin-update`: fetch origin HEAD, then compare HEAD to
-    FETCH_HEAD. Offline or non-fast-forwardable plugins are simply skipped.
+    Mirrors `omarchy-plugin-update`: fetch origin HEAD, then count the commits
+    FETCH_HEAD has that HEAD lacks. Offline plugins, and checkouts that are
+    only ahead of origin (local work, a feature branch), are skipped: the
+    updater has nothing to pull for them.
     """
     fetch = _run_git(["fetch", "--quiet", "origin", "HEAD"], dir_path)
     if fetch is None or fetch.returncode != 0:
@@ -396,7 +398,9 @@ def plugin_update(dir_path: Path) -> dict[str, str] | None:
         return None
     behind = _run_git(["rev-list", "--count", "HEAD..FETCH_HEAD"], dir_path)
     count = behind.stdout.strip() if behind is not None and behind.returncode == 0 else ""
-    label = f"{count} new commit" + ("" if count == "1" else "s") if count and count != "0" else upstream_sha[:7]
+    if not count.isdigit() or count == "0":
+        return None
+    label = f"{count} new commit" + ("" if count == "1" else "s")
     remote = _run_git(["remote", "get-url", "origin"], dir_path)
     remote_url = remote.stdout.strip() if remote is not None and remote.returncode == 0 else ""
     return {
