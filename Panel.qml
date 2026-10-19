@@ -549,7 +549,7 @@ Panel {
 
         Repeater {
           visible: !root.settingsMode
-          model: root.installedRepos
+          model: root.opened ? root.installedRepos : []
 
           delegate: BorderSurface {
             id: repoCard
