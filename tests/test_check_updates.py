@@ -131,6 +131,18 @@ class CheckMiseTests(unittest.TestCase):
         self.responses.extend([None, None])
         self.assertEqual(check_updates.check_mise("/usr/bin/mise"), [])
 
+    def test_skips_missing_lazy_tools(self):
+        # Omarchy 4.5 lazy system tools report current=null; `mise up`
+        # leaves them alone, so they must not count as updates.
+        self.responses.append({"codex": {"current": None, "latest": "0.163.0"},
+                               "claude": {"current": "2.0", "latest": "3.0"}})
+        result = check_updates.check_mise("/usr/bin/mise")
+        self.assertEqual([p["name"] for p in result], ["claude"])
+
+    def test_skips_current_equals_latest(self):
+        self.responses.append({"node": {"current": "26.12.0", "latest": "26.12.0"}})
+        self.assertEqual(check_updates.check_mise("/usr/bin/mise"), [])
+
 
 class MiseToolCountTests(unittest.TestCase):
     def setUp(self):
@@ -150,6 +162,17 @@ class MiseToolCountTests(unittest.TestCase):
     def test_failure_is_zero(self):
         self._respond(completed(stdout="{}", returncode=1))
         self.assertEqual(check_updates.mise_tool_count("/usr/bin/mise"), 0)
+
+    def test_counts_only_installed_tools(self):
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen["command"] = command
+            return completed(stdout='{"node": []}')
+
+        check_updates.subprocess.run = fake_run
+        self.assertEqual(check_updates.mise_tool_count("/usr/bin/mise"), 1)
+        self.assertIn("--installed", seen["command"])
 
 
 class MiseToolUrlsTests(unittest.TestCase):

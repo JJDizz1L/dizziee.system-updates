@@ -488,6 +488,14 @@ def check_mise(binary: str | None) -> list[dict[str, str]]:
         info = info if isinstance(info, dict) else {}
         current = str(info.get("current") or "")
         latest = str(info.get("latest") or info.get("requested") or "")
+        # Omarchy 4.5 declares lazy system tools in
+        # /etc/mise/conf.d/omarchy-tools.toml. `mise outdated --json` reports
+        # those not-yet-installed tools with current=null, but `mise up` (what
+        # the Update button and omarchy-update-mise run) leaves missing lazy
+        # tools alone — they install on first use. Skip them so the count
+        # matches what `mise up` would actually pull in.
+        if not current or not latest or current == latest:
+            continue
         name = str(key).split("@")[0]
         packages.append({"name": name, "from": current, "to": latest})
     return packages
@@ -522,7 +530,7 @@ def mise_tool_count(binary: str | None) -> int:
         return 0
     try:
         result = subprocess.run(
-            [binary, "ls", "--current", "--json"],
+            [binary, "ls", "--current", "--installed", "--json"],
             capture_output=True,
             text=True,
             timeout=30,
