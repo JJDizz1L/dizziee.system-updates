@@ -317,7 +317,7 @@ class OmarchyCheckoutUpdateTests(unittest.TestCase):
         self._real_git = check_updates._run_git
         self._real_path = check_updates.os.environ.get("OMARCHY_PATH")
 
-        def fake_git(args, cwd, timeout=None):
+        def fake_git(args, cwd, timeout=None, **kwargs):
             self.git_calls.append(args)
             return self.git_responses.get(args[0], completed())
 
@@ -459,7 +459,7 @@ class PluginUpdateTests(unittest.TestCase):
         check_updates._run_git = self._fake
         self.addCleanup(lambda: setattr(check_updates, "_run_git", self._real))
 
-    def _fake(self, args, cwd, timeout=None):
+    def _fake(self, args, cwd, timeout=None, **kwargs):
         key = " ".join(args)
         if key in self.responses:
             return self.responses[key]

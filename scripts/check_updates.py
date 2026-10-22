@@ -371,11 +371,18 @@ def git_plugin_dirs() -> list[Path]:
         return []
 
 
-def _run_git(args: list[str], cwd: Path, timeout: int = GIT_FETCH_TIMEOUT_S):
+def _run_git(args: list[str], cwd: Path, timeout: int = GIT_FETCH_TIMEOUT_S, restrict_protocols: bool = False):
     try:
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
         env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+        if restrict_protocols:
+            # A plugin is an untrusted checkout. Its .git/config can name an
+            # ext:: transport or a core.fsmonitor command, both of which run
+            # shell code during what looks like a harmless fetch. Restrict the
+            # transports and disable the config-driven monitor for this repo.
+            env["GIT_ALLOW_PROTOCOL"] = "https:ssh"
+            args = ["-c", "core.fsmonitor=false", *args]
         return subprocess.run(
             ["git", "-C", str(cwd), *args],
             capture_output=True,
@@ -395,23 +402,23 @@ def plugin_update(dir_path: Path) -> dict[str, str] | None:
     only ahead of origin (local work, a feature branch), are skipped: the
     updater has nothing to pull for them.
     """
-    fetch = _run_git(["fetch", "--quiet", "origin", "HEAD"], dir_path)
+    fetch = _run_git(["fetch", "--quiet", "origin", "HEAD"], dir_path, restrict_protocols=True)
     if fetch is None or fetch.returncode != 0:
         return None
-    head = _run_git(["rev-parse", "HEAD"], dir_path)
-    upstream = _run_git(["rev-parse", "FETCH_HEAD"], dir_path)
+    head = _run_git(["rev-parse", "HEAD"], dir_path, restrict_protocols=True)
+    upstream = _run_git(["rev-parse", "FETCH_HEAD"], dir_path, restrict_protocols=True)
     if head is None or upstream is None or head.returncode != 0 or upstream.returncode != 0:
         return None
     head_sha = head.stdout.strip()
     upstream_sha = upstream.stdout.strip()
     if not head_sha or not upstream_sha or head_sha == upstream_sha:
         return None
-    behind = _run_git(["rev-list", "--count", "HEAD..FETCH_HEAD"], dir_path)
+    behind = _run_git(["rev-list", "--count", "HEAD..FETCH_HEAD"], dir_path, restrict_protocols=True)
     count = behind.stdout.strip() if behind is not None and behind.returncode == 0 else ""
     if not count.isdigit() or count == "0":
         return None
     label = f"{count} new commit" + ("" if count == "1" else "s")
-    remote = _run_git(["remote", "get-url", "origin"], dir_path)
+    remote = _run_git(["remote", "get-url", "origin"], dir_path, restrict_protocols=True)
     remote_url = remote.stdout.strip() if remote is not None and remote.returncode == 0 else ""
     return {
         "name": dir_path.name,
@@ -424,8 +431,9 @@ def plugin_update(dir_path: Path) -> dict[str, str] | None:
 def check_plugins(dirs: list[Path]) -> list[dict[str, str]]:
     if not dirs:
         return []
-    # Each plugin is an independent network fetch; run them concurrently.
-    with ThreadPoolExecutor(max_workers=len(dirs)) as pool:
+    # Each plugin is an independent network fetch; run a bounded number
+    # concurrently so a large plugin collection cannot fan out unbounded.
+    with ThreadPoolExecutor(max_workers=min(len(dirs), 4)) as pool:
         results = list(pool.map(plugin_update, dirs))
     return [entry for entry in results if entry is not None]
 
@@ -552,7 +560,7 @@ def aur_update_cmd(helper: str | None) -> str:
     return f"{helper} -Sua; echo; read -n 1 -s -r -p 'Done. Press any key to close'"
 
 
-def collect_repo(id: str, name: str, packages: list[dict[str, str]], pkg_count: int, icon: str, update_cmd: str, installed: bool) -> dict[str, Any]:
+def collect_repo(id: str, name: str, packages: list[dict[str, str]], pkg_count: int, icon: str, update_cmd: str, installed: bool, updater: str = "") -> dict[str, Any]:
     return {
         "id": id,
         "name": name,
@@ -560,6 +568,9 @@ def collect_repo(id: str, name: str, packages: list[dict[str, str]], pkg_count: 
         "pkgCount": pkg_count,
         "icon": icon,
         "updateCmd": update_cmd,
+        # The widget rebuilds the update command from this fixed enum instead
+        # of trusting updateCmd read back from a user-writable cache.
+        "updater": updater,
         "installed": installed,
         "packages": packages,
     }
@@ -644,7 +655,8 @@ def main() -> int:
             with_links(aur_updates, upstream_urls, aur_fallback_url),
             aur_pkgs, "arch-logo.svg",
             aur_update_cmd(helper),
-            helper is not None),
+            helper is not None,
+            updater=helper or ""),
         collect_repo("flatpak", "Flatpak",
             with_links(flatpak_updates, {}, flatpak_fallback_url),
             flatpak_pkgs, "flatpak.svg",

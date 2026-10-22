@@ -5,6 +5,7 @@ import Quickshell.Io
 import Quickshell.Hyprland
 import Quickshell.Networking
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -37,7 +38,7 @@ Panel {
   property bool awaitingUpdateWindow: false
 
   readonly property string barIcon: root.total > 0 ? "󰜈" : "󰏗"
-  readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
+  readonly property color fg: root.bar ? root.bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(fg, 1.45)
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : "JetBrainsMono Nerd Font"
   // Only skip curl probes when NetworkManager definitively reports no
@@ -52,6 +53,19 @@ Panel {
     "omarchy": "https://omarchy.org/",
     "mise": "https://mise-versions.jdx.dev/"
   })
+
+  // Update commands are owned by this panel, not by the scan cache. The cache
+  // is user-writable, so a command read back from it must never reach a shell.
+  // AUR is the only repo whose command depends on the installed helper; the
+  // scanner reports that helper as a fixed enum and it is validated below.
+  readonly property var repoUpdateCommands: ({
+    "pacman": "sudo env OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
+    "flatpak": "flatpak update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
+    "omarchy": "omarchy update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
+    "plugins": "omarchy plugin update --yes; omarchy theme update; echo; read -n 1 -s -r -p 'Done. Press any key to close'",
+    "mise": "MISE_MINIMUM_RELEASE_AGE=0 mise up; echo; read -n 1 -s -r -p 'Done. Press any key to close'"
+  })
+  readonly property var aurHelpers: ["checkupdates-aur", "yay", "paru"]
 
   // Rows the user has expanded to reveal their pending packages, keyed by
   // repo id. A plain object keeps multiple rows open at once.
@@ -110,19 +124,29 @@ Panel {
     return ""
   }
 
+  // Counts come from the scan cache, so coerce them before placing them in
+  // the one rich-text label this panel builds. Anything else in that label is
+  // a fixed string or a timestamp this panel generated.
+  function nonNegativeCount(value) {
+    var count = Number(value)
+    return isFinite(count) && count > 0 ? Math.floor(count) : 0
+  }
+
   // One styled, elide-able string per repo card so long metadata can never
   // render underneath the Update button.
   function statusHtml(repo) {
     var fg = root.fg.toString()
     var dim = root.dim.toString()
+    var count = root.nonNegativeCount(repo.count)
+    var pkgCount = root.nonNegativeCount(repo.pkgCount)
     var parts = []
-    if (repo.count > 0)
-      parts.push("<font color=\"" + fg + "\">" + repo.count + (repo.count === 1 ? " update" : " updates available") + "</font>")
+    if (count > 0)
+      parts.push("<font color=\"" + fg + "\">" + count + (count === 1 ? " update" : " updates available") + "</font>")
     else
       parts.push("<font color=\"" + dim + "\">Up to date</font>")
     var status = root.repoStatus[repo.id]
-    if (repo.pkgCount > 0)
-      parts.push("<font color=\"" + dim + "\">· " + repo.pkgCount + " pkgs</font>")
+    if (pkgCount > 0)
+      parts.push("<font color=\"" + dim + "\">· " + pkgCount + " pkgs</font>")
     if (status === "checking")
       parts.push("<i><font color=\"" + dim + "\">· Checking…</font></i>")
     else if (status === "online")
@@ -134,14 +158,27 @@ Panel {
     return parts.join(" ")
   }
 
+  function updateCommandFor(repo) {
+    var id = String(repo && repo.id || "")
+    if (id === "aur") {
+      var helper = String(repo.updater || "")
+      if (root.aurHelpers.indexOf(helper) === -1) return ""
+      return helper + (helper === "checkupdates-aur" ? "" : " -Sua")
+        + "; echo; read -n 1 -s -r -p 'Done. Press any key to close'"
+    }
+    return Object.prototype.hasOwnProperty.call(root.repoUpdateCommands, id)
+      ? root.repoUpdateCommands[id] : ""
+  }
+
   function updateRepo(id) {
-    var cmd = ""
+    var repo = null
     for (var i = 0; i < repos.length; i++) {
       if (repos[i].id === id) {
-        cmd = repos[i].updateCmd || ""
+        repo = repos[i]
         break
       }
     }
+    var cmd = root.updateCommandFor(repo)
     if (!cmd) return
 
     pendingRepo = id
@@ -181,12 +218,16 @@ Panel {
     var script = ""
     for (var i = 0; i < repos.length; i++) {
       var r = repos[i]
-      var url = repoUrls[r.id]
+      var id = String(r.id || "")
+      // The cache is user-writable: only an id this panel knows may be
+      // spliced into the shell command below.
+      if (!Object.prototype.hasOwnProperty.call(repoUrls, id)) continue
+      var url = repoUrls[id]
       // Every installed repo is probed — the Online/Offline badge is useful
       // on up-to-date repos too, not just ones with updates waiting.
-      if (r.installed !== true || !url) continue
+      if (r.installed !== true) continue
       script += "(curl -sI --connect-timeout 6 --max-time 9 " + url +
-        " >/dev/null 2>&1 && echo '" + r.id + " online' || echo '" + r.id + " offline') & "
+        " >/dev/null 2>&1 && echo '" + id + " online' || echo '" + id + " offline') & "
     }
     return script + "wait"
   }
@@ -200,8 +241,9 @@ Panel {
     var pinged = 0
     for (var i = 0; i < repos.length; i++) {
       var r = repos[i]
-      if (r.installed === true && repoUrls[r.id]) {
-        next[r.id] = "checking"
+      var id = String(r.id || "")
+      if (r.installed === true && Object.prototype.hasOwnProperty.call(repoUrls, id)) {
+        next[id] = "checking"
         pinged++
       }
     }
@@ -231,6 +273,27 @@ Panel {
     return value === undefined || value === null ? fallback : value
   }
 
+  // `omarchy bar set` stores a bare value as a JSON string unless --json is
+  // used, so a boolean read back from shell.json can be "false". Coerce it
+  // instead of treating every non-false value as true.
+  function boolValue(value, fallback) {
+    if (value === undefined || value === null) return fallback
+    if (typeof value === "string") return value !== "false" && value !== "0" && value !== ""
+    return value !== false
+  }
+
+  function boolSetting(name, fallback) {
+    return root.boolValue(root.setting(name, fallback), fallback)
+  }
+
+  readonly property bool autoRefresh: root.boolSetting("autoRefresh", true)
+  readonly property bool alwaysShow: root.boolSetting("alwaysShow", true)
+  readonly property int refreshIntervalSec: {
+    var value = Number(root.setting("refreshIntervalSec", 1800))
+    if (!isFinite(value)) value = 1800
+    return Math.round(root.clamp(value, 300, 7200))
+  }
+
   function cloneObject(value, fallback) {
     if (value === undefined || value === null) return fallback
     try { return JSON.parse(JSON.stringify(value)) }
@@ -241,8 +304,8 @@ Panel {
     var next = cloneObject(source, {}) || {}
     var refresh = Number(next.refreshIntervalSec === undefined || next.refreshIntervalSec === null ? 1800 : next.refreshIntervalSec)
     next.refreshIntervalSec = Math.round(root.clamp(isFinite(refresh) ? refresh : 1800, 300, 7200))
-    next.alwaysShow = next.alwaysShow !== false
-    next.autoRefresh = Model.autoRefreshEnabled(next.autoRefresh)
+    next.alwaysShow = root.boolValue(next.alwaysShow, true)
+    next.autoRefresh = root.boolValue(next.autoRefresh, true)
     return next
   }
 
@@ -323,7 +386,7 @@ Panel {
     function refresh(): void { root.refresh() }
   }
 
-  visible: total > 0 || setting("alwaysShow", true) === true
+  visible: total > 0 || root.alwaysShow
   implicitWidth: visible ? button.implicitWidth : 0
   implicitHeight: visible ? button.implicitHeight : 0
 
@@ -358,8 +421,8 @@ Panel {
   }
 
   Timer {
-    interval: Math.max(300, Number(root.setting("refreshIntervalSec", 1800))) * 1000
-    running: Model.autoRefreshEnabled(root.setting("autoRefresh", true))
+    interval: root.refreshIntervalSec * 1000
+    running: root.autoRefresh
     repeat: true
     onTriggered: root.refresh()
   }
@@ -370,7 +433,7 @@ Panel {
   Timer {
     id: bootTimer
     interval: 90000
-    running: Model.autoRefreshEnabled(root.setting("autoRefresh", true))
+    running: root.autoRefresh
     repeat: false
     onTriggered: root.refresh()
   }
@@ -495,6 +558,7 @@ Panel {
           spacing: 8
 
           Text {
+            textFormat: Text.PlainText
             text: root.settingsMode ? "System Updates Settings" : "System Updates"
             color: root.fg
             font.family: root.fontFamily
@@ -612,6 +676,7 @@ Panel {
                     spacing: 1
 
                     Text {
+                      textFormat: Text.PlainText
                       text: modelData.name
                       color: root.fg
                       font.family: root.fontFamily
@@ -632,6 +697,7 @@ Panel {
                   Item { Layout.fillWidth: true }
 
                   Text {
+                    textFormat: Text.PlainText
                     visible: root.pendingRepo === modelData.id && root.fastPollActive
                     text: "\u2026"
                     color: root.fg
@@ -641,6 +707,7 @@ Panel {
                   }
 
                   Text {
+                    textFormat: Text.PlainText
                     visible: repoCard.expandable
                     text: repoCard.expanded ? "\uF078" : "\uF054"
                     color: root.dim
@@ -693,6 +760,7 @@ Panel {
 
                       Text {
                         Layout.fillWidth: true
+                        textFormat: Text.PlainText
                         text: modelData.name
                         color: root.fg
                         font.family: root.fontFamily
@@ -701,6 +769,7 @@ Panel {
                       }
 
                       Text {
+                        textFormat: Text.PlainText
                         visible: (modelData.from || "") !== "" || (modelData.to || "") !== ""
                         text: ((modelData.from || "") !== "" ? modelData.from + " \u2192 " : "") + (modelData.to || "")
                         color: root.dim
@@ -711,9 +780,10 @@ Panel {
 
                       Text {
                         id: linkText
+                        textFormat: Text.PlainText
                         visible: (modelData.url || "") !== ""
                         text: modelData.label || "Repo"
-                        color: linkMouse.containsMouse ? root.fg : Color.accent
+                        color: linkMouse.containsMouse ? root.fg : Commons.Color.accent
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
                         font.underline: linkMouse.containsMouse
@@ -742,6 +812,7 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           visible: {
             if (root.settingsMode) return false
             if (root.installedRepos.length === 0) return false
@@ -782,13 +853,14 @@ Panel {
                 stepSize: 300
                 fieldWidth: parent.width
                 foreground: root.fg
-                accent: Color.accent
+                accent: Commons.Color.accent
                 fontFamily: root.fontFamily
                 onModified: function(value) { root.setDraftValue("refreshIntervalSec", value) }
               }
 
               Text {
                 Layout.fillWidth: true
+                textFormat: Text.PlainText
                 text: "How often the scanner checks for system updates."
                 color: root.dim
                 font.family: root.fontFamily
@@ -802,7 +874,7 @@ Panel {
                 description: checked ? "Checks run on the interval and once after startup" : "Checks run only when you open the panel or refresh"
                 checked: root.draftValue("autoRefresh", true) === true
                 foreground: root.fg
-                accent: Color.accent
+                accent: Commons.Color.accent
                 fontFamily: root.fontFamily
                 onClicked: root.setDraftValue("autoRefresh", !checked)
               }
@@ -822,7 +894,7 @@ Panel {
                 description: checked ? "Icon visible even with no updates" : "Icon hidden when no updates available"
                 checked: root.draftValue("alwaysShow", true) === true
                 foreground: root.fg
-                accent: Color.accent
+                accent: Commons.Color.accent
                 fontFamily: root.fontFamily
                 onClicked: root.setDraftValue("alwaysShow", !checked)
               }
@@ -830,6 +902,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.settingsStatusText !== ""
             Layout.fillWidth: true
             text: root.settingsStatusText
@@ -841,6 +914,7 @@ Panel {
 
           Text {
             Layout.fillWidth: true
+            textFormat: Text.PlainText
             text: "s saves \u00B7 esc closes"
             color: root.dim
             font.family: root.fontFamily
@@ -876,6 +950,7 @@ Panel {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         visible: section.title !== ""
         Layout.fillWidth: true
         text: section.title
