@@ -88,3 +88,25 @@ test("isWebUrl rejects local and other schemes", () => {
   assert.equal(Model.isWebUrl(""), false)
   assert.equal(Model.isWebUrl(undefined), false)
 })
+
+test("markup-shaped package metadata stays inert text", () => {
+  const evil = '<img src="https://example.invalid/tracker">';
+  const result = Model.parseRepoList(JSON.stringify({
+    total: 1,
+    repos: [{
+      id: "aur",
+      name: evil,
+      count: 1,
+      installed: true,
+      packages: [{ name: evil, from: evil, to: evil, url: "https://example.org/" + evil, label: evil }]
+    }]
+  }));
+  assert.equal(result.repos.length, 1);
+  const pkg = result.repos[0].packages[0];
+  assert.ok(pkg.name.includes("<img"));
+  assert.ok(pkg.from.includes("<img"));
+  // Sinks are PlainText (Panel.qml) / StyledText numbers-only (statusHtml);
+  // the model must never strip or execute markup, only bound it.
+  assert.ok(pkg.name.length <= 200);
+  assert.ok(pkg.url.length <= 2048);
+});

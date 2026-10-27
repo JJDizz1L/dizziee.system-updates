@@ -45,6 +45,7 @@ Configuration lives in `~/.config/omarchy/shell.json`.
 |---|---|---|---|
 | `refreshIntervalSec` | integer (300–7200) | 1800 | How often to check for updates (seconds) |
 | `alwaysShow` | boolean | true | Keep icon visible even when no updates are available |
+| `autoRefresh` | boolean | true | Check on the interval and once after startup. Off means checks run only when the panel is opened. |
 
 ## How updates work
 

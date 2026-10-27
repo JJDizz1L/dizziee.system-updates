@@ -17,6 +17,13 @@ from typing import Any, Callable
 # when packages are installed/removed, so they ride a 24h disk cache instead
 # of being re-queried on every poll. Update counts stay live every run.
 PKG_COUNTS_TTL_S = 24 * 3600
+MAX_CACHE_BYTES = 256 * 1024
+MAX_STDOUT_BYTES = 512 * 1024
+MAX_LINES = 10000
+MAX_PACKAGES = 1000
+MAX_NAME_LEN = 200
+MAX_VER_LEN = 100
+MAX_URL_LEN = 2048
 
 # The Omarchy row has no per-package metadata of its own; both the packaged
 # build and a dev checkout upstream to the same repository.
@@ -60,14 +67,25 @@ def load_cache() -> dict[str, Any] | None:
             return None
         if time.time() - path.stat().st_mtime > PKG_COUNTS_TTL_S:
             return None
-        data = json.loads(path.read_text())
+        if path.stat().st_size > MAX_CACHE_BYTES:
+            return None
+        data = json.loads(path.read_text()[:MAX_CACHE_BYTES])
         counts = data.get("counts")
         urls = data.get("urls")
         if not isinstance(counts, dict) or not isinstance(urls, dict):
             return None
+        bounded_counts: dict[str, int] = {}
+        for k, v in list(counts.items())[:MAX_PACKAGES]:
+            try:
+                bounded_counts[str(k)[:MAX_NAME_LEN]] = max(0, min(int(v), 1000000))
+            except Exception:
+                continue
+        bounded_urls: dict[str, str] = {}
+        for k, v in list(urls.items())[:MAX_PACKAGES]:
+            bounded_urls[str(k)[:MAX_NAME_LEN]] = str(v)[:MAX_URL_LEN]
         return {
-            "counts": {str(k): int(v) for k, v in counts.items()},
-            "urls": {str(k): str(v) for k, v in urls.items()},
+            "counts": bounded_counts,
+            "urls": bounded_urls,
         }
     except Exception:
         return None
@@ -87,7 +105,8 @@ def count_lines(command: list[str], timeout: int = 30) -> int:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             return 0
-        return len([line for line in result.stdout.strip().split("\n") if line.strip()])
+        out = (result.stdout or "")[:MAX_STDOUT_BYTES]
+        return len([line for line in out.strip().split("\n")[:MAX_LINES] if line.strip()])
     except Exception:
         return 0
 
@@ -102,7 +121,8 @@ def command_lines(command: list[str], timeout: int = 30, require_ok: bool = True
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
         if require_ok and result.returncode != 0:
             return []
-        return [line for line in result.stdout.splitlines() if line.strip()]
+        out = (result.stdout or "")[:MAX_STDOUT_BYTES]
+        return [line for line in out.splitlines()[:MAX_LINES] if line.strip()]
     except Exception:
         return []
 
@@ -110,17 +130,17 @@ def command_lines(command: list[str], timeout: int = 30, require_ok: bool = True
 def parse_version_lines(lines: list[str]) -> list[dict[str, str]]:
     """Parse "name oldver -> newver" lines into package entries."""
     packages = []
-    for raw in lines:
-        line = raw.strip()
+    for raw in lines[:MAX_PACKAGES]:
+        line = raw.strip()[:512]
         if not line:
             continue
         match = VERSION_LINE_RE.match(line)
         if match:
-            packages.append({"name": match.group(1), "from": match.group(2), "to": match.group(3)})
+            packages.append({"name": match.group(1)[:MAX_NAME_LEN], "from": match.group(2)[:MAX_VER_LEN], "to": match.group(3)[:MAX_VER_LEN]})
             continue
         parts = line.split()
         packages.append(
-            {"name": parts[0], "from": "", "to": parts[1] if len(parts) > 1 else ""}
+            {"name": parts[0][:MAX_NAME_LEN], "from": "", "to": parts[1][:MAX_VER_LEN] if len(parts) > 1 else ""}
         )
     return packages
 

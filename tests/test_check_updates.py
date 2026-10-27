@@ -642,3 +642,23 @@ class MainIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParseVersionMarkupTests(unittest.TestCase):
+    def test_markup_names_stay_inert_and_bounded(self):
+        evil = '<img src="https://example.invalid/tracker">'
+        lines = [f"{evil} 1.0 -> 2.0", "x" * 500 + " 1.0 -> 2.0"]
+        pkgs = check_updates.parse_version_lines(lines)
+        self.assertEqual(len(pkgs), 2)
+        self.assertIn("<img", pkgs[0]["name"])
+        self.assertLessEqual(len(pkgs[1]["name"]), check_updates.MAX_NAME_LEN)
+
+    def test_command_lines_caps_stdout_and_lines(self):
+        big = "pkg 1.0 -> 2.0\n" * (check_updates.MAX_LINES + 100)
+        orig = check_updates.subprocess.run
+        check_updates.subprocess.run = lambda *a, **k: completed(stdout=big)
+        try:
+            lines = check_updates.command_lines(["checkupdates"])
+        finally:
+            check_updates.subprocess.run = orig
+        self.assertLessEqual(len(lines), check_updates.MAX_LINES)

@@ -41,6 +41,14 @@ Panel {
   readonly property color fg: root.bar ? root.bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(fg, 1.45)
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : "JetBrainsMono Nerd Font"
+  Commons.Translations {
+    id: strings
+    directory: Qt.resolvedUrl("i18n")
+  }
+
+  function fmtInt(value) {
+    return Commons.I18n.formatNumber(Math.floor(Number(value) || 0))
+  }
   // Only skip curl probes when NetworkManager definitively reports no
   // connectivity. Unknown/Portal/Limited must still attempt curl (ground
   // truth) — requiring Full here marked all repos offline when NM checks
@@ -137,22 +145,26 @@ Panel {
   function statusHtml(repo) {
     var fg = root.fg.toString()
     var dim = root.dim.toString()
+    var accent = Commons.Color.accent.toString()
+    var urgent = Commons.Color.urgent.toString()
     var count = root.nonNegativeCount(repo.count)
     var pkgCount = root.nonNegativeCount(repo.pkgCount)
     var parts = []
-    if (count > 0)
-      parts.push("<font color=\"" + fg + "\">" + count + (count === 1 ? " update" : " updates available") + "</font>")
-    else
-      parts.push("<font color=\"" + dim + "\">Up to date</font>")
+    if (count > 0) {
+      var countText = count === 1 ? strings.t("updates.oneUpdate").arg(fmtInt(count)) : strings.t("updates.manyUpdates").arg(fmtInt(count))
+      parts.push("<font color=\"" + fg + "\">" + countText + "</font>")
+    } else {
+      parts.push("<font color=\"" + dim + "\">" + strings.t("updates.upToDateShort") + "</font>")
+    }
     var status = root.repoStatus[repo.id]
     if (pkgCount > 0)
-      parts.push("<font color=\"" + dim + "\">· " + pkgCount + " pkgs</font>")
+      parts.push("<font color=\"" + dim + "\">· " + strings.t("updates.pkgs").arg(fmtInt(pkgCount)) + "</font>")
     if (status === "checking")
-      parts.push("<i><font color=\"" + dim + "\">· Checking…</font></i>")
+      parts.push("<i><font color=\"" + dim + "\">· " + strings.t("updates.checking") + "</font></i>")
     else if (status === "online")
-      parts.push("<font color=\"#4ade80\">● Online</font>")
+      parts.push("<font color=\"" + accent + "\">● " + strings.t("updates.online") + "</font>")
     else if (status === "offline")
-      parts.push("<font color=\"#f87171\">✗ Offline</font>")
+      parts.push("<font color=\"" + urgent + "\">✗ " + strings.t("updates.offline") + "</font>")
     if (root.lastCheckedText !== "" && status !== "checking" && status !== "idle")
       parts.push("<font color=\"" + dim + "\">· Checked " + root.lastCheckedText + "</font>")
     return parts.join(" ")
@@ -263,9 +275,9 @@ Panel {
   function updateLastChecked() {
     if (lastPingAt === 0) { lastCheckedText = ""; return }
     var elapsed = Math.floor((Date.now() - lastPingAt) / 1000)
-    if (elapsed < 60) lastCheckedText = elapsed + "s ago"
-    else if (elapsed < 3600) lastCheckedText = Math.floor(elapsed / 60) + "m ago"
-    else lastCheckedText = Math.floor(elapsed / 3600) + "h ago"
+    if (elapsed < 60) lastCheckedText = strings.t("updates.checkedAgoSec").arg(fmtInt(elapsed))
+    else if (elapsed < 3600) lastCheckedText = strings.t("updates.checkedAgoMin").arg(fmtInt(Math.floor(elapsed / 60)))
+    else lastCheckedText = strings.t("updates.checkedAgoHour").arg(fmtInt(Math.floor(elapsed / 3600)))
   }
 
   function setting(name, fallback) {
@@ -333,9 +345,9 @@ Panel {
     root.settings = next
     if (canPersistSettings()) {
       bar.shell.updateEntryInline(root.moduleName, next)
-      settingsStatusText = "Saved to shell.json"
+      settingsStatusText = strings.t("updates.savedToShell")
     } else {
-      settingsStatusText = "Saved for this session"
+      settingsStatusText = strings.t("updates.savedForSession")
     }
   }
 
@@ -518,7 +530,7 @@ Panel {
       var parts = []
       for (var i = 0; i < root.installedRepos.length; i++) {
         var r = root.installedRepos[i]
-        if (r.count > 0) parts.push(r.count + " " + r.name)
+        if (r.count > 0) parts.push(fmtInt(r.count) + " " + Model.text(r.name, 80))
       }
       if (parts.length === 0) return ""
       return parts.join(", ")
@@ -559,7 +571,7 @@ Panel {
 
           Text {
             textFormat: Text.PlainText
-            text: root.settingsMode ? "System Updates Settings" : "System Updates"
+            text: root.settingsMode ? strings.t("updates.settingsTitle") : strings.t("updates.title")
             color: root.fg
             font.family: root.fontFamily
             font.pixelSize: Style.font.title
@@ -570,9 +582,9 @@ Panel {
 
           Button {
             visible: root.settingsMode
-            text: "Updates"
+            text: strings.t("updates.updates")
             foreground: root.fg
-            tooltipText: "Back to updates"
+            tooltipText: strings.t("updates.backToUpdates")
             fontFamily: root.fontFamily
             fontSize: Style.font.caption
             horizontalPadding: Style.spacing.controlPaddingX
@@ -582,9 +594,9 @@ Panel {
 
           Button {
             visible: root.settingsMode
-            text: "Save"
+            text: strings.t("updates.save")
             foreground: root.fg
-            tooltipText: "Save settings"
+            tooltipText: strings.t("updates.saveSettings")
             fontFamily: root.fontFamily
             fontSize: Style.font.caption
             horizontalPadding: Style.spacing.controlPaddingX
@@ -595,9 +607,9 @@ Panel {
 
           Button {
             visible: !root.settingsMode
-            text: "Refresh"
+            text: strings.t("updates.refresh")
             foreground: root.fg
-            tooltipText: "Refresh updates"
+            tooltipText: strings.t("updates.refreshStats")
             fontFamily: root.fontFamily
             fontSize: Style.font.caption
             horizontalPadding: Style.spacing.controlPaddingX
@@ -717,7 +729,7 @@ Panel {
                   }
 
                   Button {
-                    text: "Update"
+                    text: strings.t("updates.update")
                     Layout.rightMargin: Style.space(6)
                     foreground: root.fg
                     fontFamily: root.fontFamily
@@ -782,7 +794,7 @@ Panel {
                         id: linkText
                         textFormat: Text.PlainText
                         visible: (modelData.url || "") !== ""
-                        text: modelData.label || "Repo"
+                        text: modelData.label || strings.t("updates.repo")
                         color: linkMouse.containsMouse ? root.fg : Commons.Color.accent
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -823,7 +835,7 @@ Panel {
           }
           Layout.fillWidth: true
           Layout.topMargin: Style.space(4)
-          text: "System is up to date."
+          text: strings.t("updates.upToDate")
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -838,7 +850,7 @@ Panel {
           readonly property bool editorActive: refreshIntervalField.field.activeFocus
 
           SectionCard {
-            title: "Refresh"
+            title: strings.t("updates.refreshSection")
 
             ColumnLayout {
               width: parent.width
@@ -846,7 +858,7 @@ Panel {
 
               NumberField {
                 id: refreshIntervalField
-                label: "Check for updates every (seconds)"
+                label: strings.t("updates.refreshInterval")
                 value: Number(root.draftValue("refreshIntervalSec", 1800))
                 from: 300
                 to: 7200
@@ -861,7 +873,7 @@ Panel {
               Text {
                 Layout.fillWidth: true
                 textFormat: Text.PlainText
-                text: "How often the scanner checks for system updates."
+                text: strings.t("updates.refreshHelp")
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -870,8 +882,8 @@ Panel {
 
               Toggle {
                 Layout.fillWidth: true
-                label: "Automatic checks"
-                description: checked ? "Checks run on the interval and once after startup" : "Checks run only when you open the panel or refresh"
+                label: strings.t("updates.autoChecks")
+                description: checked ? strings.t("updates.autoChecksOn") : strings.t("updates.autoChecksOff")
                 checked: root.draftValue("autoRefresh", true) === true
                 foreground: root.fg
                 accent: Commons.Color.accent
@@ -882,7 +894,7 @@ Panel {
           }
 
           SectionCard {
-            title: "Visibility"
+            title: strings.t("updates.visibility")
 
             ColumnLayout {
               width: parent.width
@@ -890,8 +902,8 @@ Panel {
 
               Toggle {
                 Layout.fillWidth: true
-                label: "Always Show"
-                description: checked ? "Icon visible even with no updates" : "Icon hidden when no updates available"
+                label: strings.t("updates.alwaysShow")
+                description: checked ? strings.t("updates.alwaysShowOn") : strings.t("updates.alwaysShowOff")
                 checked: root.draftValue("alwaysShow", true) === true
                 foreground: root.fg
                 accent: Commons.Color.accent
@@ -915,7 +927,7 @@ Panel {
           Text {
             Layout.fillWidth: true
             textFormat: Text.PlainText
-            text: "s saves \u00B7 esc closes"
+            text: strings.t("updates.keysHint")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

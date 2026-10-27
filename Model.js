@@ -89,6 +89,13 @@ if (typeof module !== "undefined") {
   module.exports = {
     parseRepoList: parseRepoList,
     autoRefreshEnabled: autoRefreshEnabled,
-    isWebUrl: isWebUrl
+    isWebUrl: isWebUrl,
+    text: text,
+    count: count,
+    MAX_REPOS: MAX_REPOS,
+    MAX_PACKAGES_PER_REPO: MAX_PACKAGES_PER_REPO,
+    MAX_COUNT: MAX_COUNT,
+    MAX_URL: MAX_URL,
+    KNOWN_REPO_IDS: KNOWN_REPO_IDS
   }
 }
