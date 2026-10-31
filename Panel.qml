@@ -143,30 +143,28 @@ Panel {
   // One styled, elide-able string per repo card so long metadata can never
   // render underneath the Update button.
   function statusHtml(repo) {
-    var fg = root.fg.toString()
-    var dim = root.dim.toString()
-    var accent = Commons.Color.accent.toString()
-    var urgent = Commons.Color.urgent.toString()
+    // Plain-text variant: no inline markup (colors/italic dropped for
+    // textFormat: Text.PlainText compliance; see plugins.md UI safety).
     var count = root.nonNegativeCount(repo.count)
     var pkgCount = root.nonNegativeCount(repo.pkgCount)
     var parts = []
     if (count > 0) {
       var countText = count === 1 ? strings.t("updates.oneUpdate").arg(fmtInt(count)) : strings.t("updates.manyUpdates").arg(fmtInt(count))
-      parts.push("<font color=\"" + fg + "\">" + countText + "</font>")
+      parts.push(countText)
     } else {
-      parts.push("<font color=\"" + dim + "\">" + strings.t("updates.upToDateShort") + "</font>")
+      parts.push(strings.t("updates.upToDateShort"))
     }
     var status = root.repoStatus[repo.id]
     if (pkgCount > 0)
-      parts.push("<font color=\"" + dim + "\">· " + strings.t("updates.pkgs").arg(fmtInt(pkgCount)) + "</font>")
+      parts.push("\u00b7 " + strings.t("updates.pkgs").arg(fmtInt(pkgCount)))
     if (status === "checking")
-      parts.push("<i><font color=\"" + dim + "\">· " + strings.t("updates.checking") + "</font></i>")
+      parts.push("\u00b7 " + strings.t("updates.checking"))
     else if (status === "online")
-      parts.push("<font color=\"" + accent + "\">● " + strings.t("updates.online") + "</font>")
+      parts.push("\u25cf " + strings.t("updates.online"))
     else if (status === "offline")
-      parts.push("<font color=\"" + urgent + "\">✗ " + strings.t("updates.offline") + "</font>")
+      parts.push("\u2717 " + strings.t("updates.offline"))
     if (root.lastCheckedText !== "" && status !== "checking" && status !== "idle")
-      parts.push("<font color=\"" + dim + "\">· Checked " + root.lastCheckedText + "</font>")
+      parts.push("\u00b7 Checked " + root.lastCheckedText)
     return parts.join(" ")
   }
 
@@ -698,7 +696,7 @@ Panel {
 
                     Text {
                       Layout.fillWidth: true
-                      textFormat: Text.StyledText
+                      textFormat: Text.PlainText
                       elide: Text.ElideRight
                       text: root.statusHtml(modelData)
                       font.family: root.fontFamily
